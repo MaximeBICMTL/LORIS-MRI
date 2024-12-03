@@ -87,6 +87,11 @@ def import_bids_dataset(env: Env, args: BidsImporterArgs):
     for bids_session in bids.sessions:
         import_bids_session(env, importer, bids_session, dataset_tag_dict)
 
+    # Process module importers.
+
+    for module_importer in importer.module_importers:
+        module_importer(env, importer, bids)
+
     # Print import summary.
 
     print_bids_import_summary(env, importer)
