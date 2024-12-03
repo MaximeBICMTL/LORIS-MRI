@@ -8,6 +8,24 @@ from lib.db.queries.user_login_history import count_failed_logins_since, try_get
 from lib.env import Env
 
 
+def is_user_account_active(env: Env, user: DbUser) -> bool:
+    """
+    Check whether a user account satisfies the state checks used by LORIS authentication.
+    """
+
+    if not user.active or user.pending_approval or user.password_change_required:
+        return False
+
+    current_date = get_database_time(env.db).date()
+    if user.active_from is not None and current_date < user.active_from:
+        return False
+
+    if user.active_to is None or current_date <= user.active_to:
+        return False
+
+    return True
+
+
 def is_user_account_locked(env: Env, username: str, ip_address: str) -> bool:
     """
     Check whether a user has made too many failed login attempts from a client IP.
