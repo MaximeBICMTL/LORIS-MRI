@@ -4,6 +4,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any, Literal
 
 from loris_bids_reader.eeg.channels import BidsEegChannelsTsvFile
 from loris_bids_reader.eeg.sidecar import BidsEegSidecarJsonFile
@@ -15,12 +16,12 @@ from loris_utils.crypto import compute_file_blake2b_hash
 import lib.exitcode
 import lib.utilities as utilities
 from lib.config import get_eeg_pre_package_download_dir_path_config, get_eeg_viz_enabled_config
+from lib.database import Database
 from lib.database_lib.physiological_event_archive import PhysiologicalEventArchive
 from lib.db.models.physio_file import DbPhysioFile
 from lib.db.models.session import DbSession
 from lib.db.queries.physio_file import try_get_physio_file_with_path
 from lib.env import Env
-from lib.import_bids_dataset.copy_files import copy_scans_tsv_file_to_loris_bids_dir
 from lib.import_bids_dataset.file_type import get_check_bids_imaging_file_type_from_extension
 from lib.import_bids_dataset.physio import (
     get_check_bids_physio_file_hash,
@@ -40,35 +41,28 @@ class Eeg:
     into the database by calling the lib.physiological class.
     """
 
-    def __init__(self, env: Env, bids_reader, bids_info: BidsDataTypeInfo, session: DbSession, db,
-                 data_dir, loris_bids_eeg_rel_dir,
-                 loris_bids_root_dir, dataset_tag_dict, dataset_type):
+    def __init__(self, env: Env, bids_layout, bids_info: BidsDataTypeInfo, session: DbSession, db: Database,
+        data_dir: str, loris_bids_eeg_rel_dir: str, loris_bids_root_dir: str | None, dataset_tag_dict: dict[Any, Any],
+        dataset_type: Literal['raw', 'derivative'] | None,
+    ):
         """
         Constructor method for the Eeg class.
 
-        :param bids_reader  : dictionary with BIDS reader information
-         :type bids_reader  : dict
+        :param bids_layout  : PyBIDS layout
         :param bids_info    : the BIDS data type information
         :param session      : The LORIS session the EEG datasets are linked to
         :param db           : Database class object
-         :type db           : object
         :param data_dir     : LORIS data directory path (usually /data/PROJECT/data)
-         :type data_dir     : str
         :param loris_bids_eeg_rel_dir: LORIS BIDS EEG relative dir path to data_dir
-         :type loris_bids_eeg_rel_dir: str
         :param loris_bids_root_dir   : LORIS BIDS root directory path
-         :type loris_bids_root_dir   : str
         :param dataset_tag_dict      : Dict of dataset-inherited HED tags
-         :type dataset_tag_dict      : dict
         :param dataset_type          : raw | derivative. Type of the dataset
-         :type dataset_type          : string
         """
 
         self.env = env
 
         # load bids objects
-        self.bids_reader   = bids_reader
-        self.bids_layout   = bids_reader.bids_layout
+        self.bids_layout = bids_layout
 
         # load the LORIS BIDS import root directory where the eeg files will
         # be copied
@@ -327,16 +321,8 @@ class Eeg:
                         print(f"ERROR: {error}")
                         sys.exit(lib.exitcode.PROGRAM_EXECUTION_FAILURE)
 
-                    if self.loris_bids_root_dir:
-                        # copy the scans.tsv file to the LORIS BIDS import directory
-                        scans_path = copy_scans_tsv_file_to_loris_bids_dir(
-                            self.scans_file,
-                            self.bids_info.subject,
-                            self.loris_bids_root_dir,
-                            self.data_dir,
-                        )
-
-                    eeg_file_data['scans_tsv_file'] = scans_path
+                    # TODO: Better handle scans.tsv path (LORIS one instead of real one).
+                    eeg_file_data['scans_tsv_file'] = self.scans_file.path
                     scans_blake2 = compute_file_blake2b_hash(self.scans_file.path)
                     eeg_file_data['physiological_scans_tsv_file_bake2hash'] = scans_blake2
 
