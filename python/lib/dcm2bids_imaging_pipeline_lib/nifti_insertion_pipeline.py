@@ -10,7 +10,6 @@ from loris_bids_reader.mri.sidecar import BidsMriSidecarJsonFile
 from loris_utils.crypto import compute_file_blake2b_hash, compute_file_md5_hash
 
 import lib.exitcode
-from lib.bids import get_bids_json_session_info
 from lib.db.queries.dicom_archive import try_get_dicom_archive_series_with_series_uid_echo_time
 from lib.db.queries.mri_scan_type import try_get_mri_scan_type_with_id, try_get_mri_scan_type_with_name
 from lib.dcm2bids_imaging_pipeline_lib.base_pipeline import BasePipeline
@@ -20,6 +19,7 @@ from lib.imaging_lib.file_parameter import register_mri_file_parameter, register
 from lib.imaging_lib.nifti import add_nifti_spatial_file_parameters
 from lib.imaging_lib.nifti_pic import create_nifti_preview_picture
 from lib.import_bids_dataset.file_type import get_check_bids_imaging_file_type_from_extension
+from lib.import_bids_dataset.json import get_bids_json_session_info
 from lib.logging import log_error_exit, log_verbose
 
 

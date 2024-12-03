@@ -4,6 +4,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any, Literal
 
 from loris_bids_reader.eeg.channels import BidsEegChannelsTsvFile
 from loris_bids_reader.eeg.sidecar import BidsEegSidecarJsonFile
@@ -14,14 +15,13 @@ from loris_utils.crypto import compute_file_blake2b_hash
 
 import lib.exitcode
 import lib.utilities as utilities
-from lib.candidate import Candidate
 from lib.config import get_eeg_pre_package_download_dir_path_config, get_eeg_viz_enabled_config
+from lib.database import Database
 from lib.database_lib.physiological_event_archive import PhysiologicalEventArchive
 from lib.db.models.physio_file import DbPhysioFile
+from lib.db.models.session import DbSession
 from lib.db.queries.physio_file import try_get_physio_file_with_path
-from lib.db.queries.session import try_get_session_with_id
 from lib.env import Env
-from lib.import_bids_dataset.copy_files import copy_scans_tsv_file_to_loris_bids_dir
 from lib.import_bids_dataset.file_type import get_check_bids_imaging_file_type_from_extension
 from lib.import_bids_dataset.physio import (
     get_check_bids_physio_file_hash,
@@ -33,7 +33,6 @@ from lib.physio.chunking import create_physio_channels_chunks
 from lib.physio.file import insert_physio_file
 from lib.physio.parameters import insert_physio_file_parameters
 from lib.physiological import Physiological
-from lib.session import Session
 
 
 class Eeg:
@@ -90,37 +89,29 @@ class Eeg:
         db.disconnect()
     """
 
-    def __init__(self, env: Env, bids_reader, bids_info: BidsDataTypeInfo, db,
-                 data_dir, default_visit_label, loris_bids_eeg_rel_dir,
-                 loris_bids_root_dir, dataset_tag_dict, dataset_type):
+    def __init__(self, env: Env, bids_layout, bids_info: BidsDataTypeInfo, session: DbSession, db: Database,
+        data_dir: str, loris_bids_eeg_rel_dir: str, loris_bids_root_dir: str | None, dataset_tag_dict: dict[Any, Any],
+        dataset_type: Literal['raw', 'derivative'] | None,
+    ):
         """
         Constructor method for the Eeg class.
 
-        :param bids_reader  : dictionary with BIDS reader information
-         :type bids_reader  : dict
+        :param bids_layout  : PyBIDS layout
+         :type bids_layout  : object
         :param bids_info    : the BIDS data type information
         :param db           : Database class object
          :type db           : object
         :param data_dir     : LORIS data directory path (usually /data/PROJECT/data)
-         :type data_dir     : str
-        :param default_visit_label   : default visit label to be used if no BIDS
-                                       session are present in the BIDS structure
-         :type default_visit_label   : str
         :param loris_bids_eeg_rel_dir: LORIS BIDS EEG relative dir path to data_dir
-         :type loris_bids_eeg_rel_dir: str
         :param loris_bids_root_dir   : LORIS BIDS root directory path
-         :type loris_bids_root_dir   : str
         :param dataset_tag_dict      : Dict of dataset-inherited HED tags
-         :type dataset_tag_dict      : dict
         :param dataset_type          : raw | derivative. Type of the dataset
-         :type dataset_type          : string
         """
 
         self.env = env
 
         # load bids objects
-        self.bids_reader   = bids_reader
-        self.bids_layout   = bids_reader.bids_layout
+        self.bids_layout = bids_layout
 
         # load the LORIS BIDS import root directory where the eeg files will
         # be copied
@@ -138,28 +129,10 @@ class Eeg:
         self.db = db
 
         # find corresponding CandID and SessionID in LORIS
-        self.loris_cand_info = self.get_loris_cand_info()
-        self.default_vl      = default_visit_label
-        self.psc_id          = self.loris_cand_info['PSCID']
-        self.cand_id         = self.loris_cand_info['CandID']
-        self.center_id       = self.loris_cand_info['RegistrationCenterID']
-        self.project_id      = self.loris_cand_info['RegistrationProjectID']
+        self.session = session
 
         hed_query = 'SELECT * FROM hed_schema_nodes WHERE 1'
         self.hed_union = self.db.pselect(query=hed_query, args=())
-
-        self.cohort_id   = None
-        if bids_reader.participants_info is not None:
-            row = bids_reader.participants_info.get_row(self.bids_info.subject)
-            if 'cohort' in row.data:
-                cohort_info = db.pselect(
-                    "SELECT CohortID FROM cohort WHERE title = %s",
-                    [row.data['cohort'], ]
-                )
-                if len(cohort_info) > 0:
-                    self.cohort_id = cohort_info[0]['CohortID']
-
-        self.session_id      = self.get_loris_session_id()
 
         # check if a tsv with acquisition dates or age is available for the subject
         self.scans_file = None
@@ -181,59 +154,6 @@ class Eeg:
             self.register_data(derivatives=True)
 
         env.db.commit()
-
-    def get_loris_cand_info(self):
-        """
-        Gets the LORIS Candidate info for the BIDS subject.
-
-        :return: Candidate info of the subject found in the database
-         :rtype: list
-        """
-
-        candidate = Candidate(verbose=self.env.verbose, cand_id=self.bids_info.subject)
-        loris_cand_info = candidate.get_candidate_info_from_loris(self.db)
-
-        if not loris_cand_info:
-            candidate = Candidate(verbose=self.env.verbose, psc_id=self.bids_info.subject)
-            loris_cand_info = candidate.get_candidate_info_from_loris(self.db)
-
-        if not loris_cand_info:
-            print(f"Candidate {self.bids_info.subject} not found. You can retry with the --createcandidate option.\n")
-            sys.exit(lib.exitcode.CANDIDATE_NOT_FOUND)
-
-        return loris_cand_info
-
-    def get_loris_session_id(self):
-        """
-        Greps the LORIS session.ID corresponding to the BIDS visit. Note,
-        if no BIDS visit are set, will use the default visit label value set
-        in the config module
-
-        :return: the session's ID in LORIS
-         :rtype: int
-        """
-
-        # check if there are any visit label in BIDS structure, if not,
-        # will use the default visit label set in the config module
-        visit_label = self.bids_info.session if self.bids_info.session is not None else self.default_vl
-
-        session = Session(
-            self.db, self.env.verbose, self.cand_id, visit_label,
-            self.center_id, self.project_id, self.cohort_id
-        )
-        loris_vl_info = session.get_session_info_from_loris()
-
-        if not loris_vl_info:
-            message = "ERROR: visit label " + visit_label + " does not exist in " + \
-                      "the session table for candidate "  + str(self.cand_id)    + \
-                      "\nPlease make sure the visit label is created in the "    + \
-                      "database or run bids_import.py with the -s option -s if " + \
-                      "you wish that the insertion pipeline creates the visit "  + \
-                      "label in the session table."
-            print(message)
-            exit(lib.exitcode.SELECT_FAILURE)
-
-        return loris_vl_info['ID']
 
     def grep_bids_files(self, bids_type):
         """
@@ -450,16 +370,8 @@ class Eeg:
                         print(f"ERROR: {error}")
                         sys.exit(lib.exitcode.PROGRAM_EXECUTION_FAILURE)
 
-                    if self.loris_bids_root_dir:
-                        # copy the scans.tsv file to the LORIS BIDS import directory
-                        scans_path = copy_scans_tsv_file_to_loris_bids_dir(
-                            self.scans_file,
-                            self.bids_info.subject,
-                            self.loris_bids_root_dir,
-                            self.data_dir,
-                        )
-
-                    eeg_file_data['scans_tsv_file'] = scans_path
+                    # TODO: Better handle scans.tsv path (LORIS one instead of real one).
+                    eeg_file_data['scans_tsv_file'] = self.scans_file.path
                     scans_blake2 = compute_file_blake2b_hash(self.scans_file.path)
                     eeg_file_data['physiological_scans_tsv_file_bake2hash'] = scans_blake2
 
@@ -500,11 +412,9 @@ class Eeg:
 
             # insert the file along with its information into
             # physiological_file and physiological_parameter_file tables
-            session = try_get_session_with_id(self.env.db, self.session_id)
-
             physio_file = insert_physio_file(
                 self.env,
-                session,
+                self.session,
                 Path(eeg_path),
                 file_type,
                 modality,
@@ -785,7 +695,7 @@ class Eeg:
                         event_metadata=event_metadata,
                         event_metadata_file=event_metadata_path,
                         physiological_file=physiological_file,
-                        project_id=self.project_id,
+                        project_id=self.session.project_id,
                         blake2=blake2,
                         project_wide=False,
                         hed_union=self.hed_union
@@ -807,7 +717,7 @@ class Eeg:
                 events_file=events_data_file,
                 event_file=event_path,
                 physiological_file=physiological_file,
-                project_id=self.project_id,
+                project_id=self.session.project_id,
                 blake2=blake2,
                 dataset_tag_dict=self.dataset_tag_dict,
                 file_tag_dict=file_tag_dict,
@@ -856,7 +766,8 @@ class Eeg:
                         f'sub-{self.bids_info.subject}_ses-{self.default_vl}'
                     )
                 )
-            copy_file = self.loris_bids_root_dir + copy_file
+
+            copy_file = os.path.join(self.loris_bids_root_dir, copy_file)
 
         # create the directory if it does not exist
         lib.utilities.create_dir(
