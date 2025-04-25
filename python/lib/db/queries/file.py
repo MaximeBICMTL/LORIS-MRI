@@ -26,19 +26,14 @@ def try_get_file_with_unique_combination(
     ).scalar_one_or_none()
 
 
-def try_get_parameter_value_with_file_id_parameter_name(
-    db: Database,
-    file_id: int,
-    parameter_name: str
-) -> DbFileParameter | None:
+def try_get_file_with_rel_path(db: Database, rel_path: str) -> DbFile | None:
     """
-    Get parameter value from file ID and parameter name, or return `None` if no entry was found
+    Get an imaging file from the database using its relative path, or return `None` if no imaging
+    file is found.
     """
 
-    return db.execute(select(DbFileParameter)
-        .join(DbFileParameter.type)
-        .where(DbParameterType.name == parameter_name)
-        .where(DbFileParameter.file_id == file_id)
+    return db.execute(select(DbFile)
+        .where(DbFile.rel_path == rel_path)
     ).scalar_one_or_none()
 
 
