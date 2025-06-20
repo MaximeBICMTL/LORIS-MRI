@@ -3,6 +3,7 @@ import re
 
 import nibabel as nib
 import numpy as np
+from nibabel.nifti1 import Nifti1Image
 from nilearn import plotting
 
 from lib.config import get_data_dir_path_config
