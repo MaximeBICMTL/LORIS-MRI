@@ -128,17 +128,7 @@ sub getSubjectIDs {
         $subjectID{'visitLabel'} = NeuroDB::MRI::my_trim($3);
         $subjectID{'isPhantom'}  = 0;
         
-        $subjectID{'createVisitLabel'} = 1;
-
-        my $subprojectTitle = "Disease";
-        my $query = "SELECT CohortID FROM cohort WHERE title = ?";
-        my $sth = $${dbhr}->prepare($query);
-        $sth->execute($subprojectTitle);
-
-        if ($sth->rows > 0) {
-            my $row = $sth->fetchrow_hashref();
-            $subjectID{'CohortID'} = $row->{'CohortID'};
-        }
+        $subjectID{'createVisitLabel'} = 0;
 
         if ($1 =~ /^([A-Za-z]{3,4})\d{7}$/) {
             my $pscidPrefix = $1;
@@ -155,7 +145,16 @@ sub getSubjectIDs {
                 if (exists $row->{'ImagingCreateVisitLabel'}) {
                     my $val = $row->{'ImagingCreateVisitLabel'};
                     $subjectID{'createVisitLabel'} = $val;
-                    
+
+                    my $subprojectTitle = "Disease";
+                    my $query = "SELECT CohortID FROM cohort WHERE title = ?";
+                    my $sth = $${dbhr}->prepare($query);
+                    $sth->execute($subprojectTitle);
+                    if ($sth->rows > 0) {
+                        my $row = $sth->fetchrow_hashref();
+                        $subjectID{'CohortID'} = $row->{'CohortID'};
+                    }
+
                     # when createVisitLabel is set to 1 there is a chance the visit label does not exist 
                     # so fetch the center from the candidate instead and pass it to the MRI code
                     if ($val == 1) {
