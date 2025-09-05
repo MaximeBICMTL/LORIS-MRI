@@ -1,0 +1,51 @@
+from sqlalchemy import select
+from sqlalchemy.orm import Session as Database
+
+from lib.db.models.file import DbFile
+from lib.db.models.file_parameter import DbFileParameter
+from lib.db.models.parameter_type import DbParameterType
+
+
+def try_get_file_with_unique_combination(
+    db: Database,
+    series_uid: str,
+    echo_time: str | None,
+    echo_number: str | None,
+    phase_encoding_direction: str | None
+) -> DbFile | None:
+    """
+    Get a file from the database using its SeriesInstanceUID, or return `None` if
+    no file was found.
+    """
+
+    return db.execute(select(DbFile)
+        .where(DbFile.series_uid == series_uid)
+        .where(DbFile.echo_time == echo_time)
+        .where(DbFile.echo_number == echo_number)
+        .where(DbFile.phase_encoding_direction == phase_encoding_direction)
+    ).scalar_one_or_none()
+
+
+def try_get_file_with_rel_path(db: Database, rel_path: str) -> DbFile | None:
+    """
+    Get an imaging file from the database using its relative path, or return `None` if no imaging
+    file is found.
+    """
+
+    return db.execute(select(DbFile)
+        .where(DbFile.rel_path == rel_path)
+    ).scalar_one_or_none()
+
+
+def try_get_file_with_hash(db: Database, file_hash: str) -> DbFile | None:
+    """
+    Get an imaging file from the database using its BLAKE2b or MD5 hash, or return `None` if no
+    imaging file is found.
+    """
+
+    return db.execute(select(DbFile)
+        .join(DbFile.parameters)
+        .join(DbFileParameter.type)
+        .where(DbParameterType.name.in_(['file_blake2b_hash', 'md5hash']))
+        .where(DbFileParameter.value == file_hash)
+    ).scalar_one_or_none()

@@ -7,8 +7,8 @@ import sys
 
 import lib.exitcode
 import lib.utilities
-from lib.lorisgetopt import LorisGetOpt
 from lib.dcm2bids_imaging_pipeline_lib.nifti_insertion_pipeline import NiftiInsertionPipeline
+from lib.lorisgetopt import LorisGetOpt
 
 __license__ = "GPLv3"
 
@@ -117,7 +117,7 @@ def input_error_checking(loris_getopt_obj):
     if not json_path and not scan_type:
         print(
             "[ERROR   ] a json_path or a loris_scan_type need to be provided in order"
-            "to determine the image file protocol.\n"
+            " to determine the image file protocol.\n"
         )
         sys.exit(lib.exitcode.MISSING_ARG)
 
