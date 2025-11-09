@@ -637,9 +637,15 @@ class NiftiInsertionPipeline(BasePipeline):
             'TarchiveID': self.dicom_archive.id,
             'MincFile': file_rel_path,
             'PatientName': self.json_file_dict['PatientName'],
-            'CandidateID': self.session.candidate.id,
+            # C-BIG OVERRIDE START
+            # Remove when updating to LORIS 27
+            'CandID': self.session.candidate.cand_id,
+            # C-BIG OVERRIDE END
             'Visit_label': self.session.visit_label,
-            'MriScanTypeID': self.scan_type_id,
+            # C-BIG OVERRIDE START
+            # Remove when updating to LORIS 27
+            'Scan_type': self.scan_type_id,
+            # C-BIG OVERRIDE END
             'EchoTime': scan_param['EchoTime'] if 'EchoTime' in scan_param.keys() else None,
             'EchoNumber': scan_param['EchoNumber'] if 'EchoNumber' in scan_param.keys() else None,
             'PhaseEncodingDirection': phase_enc_dir,
@@ -684,7 +690,10 @@ class NiftiInsertionPipeline(BasePipeline):
             'PhaseEncodingDirection': phase_enc_dir,
             'CoordinateSpace': 'native',
             'OutputType': 'native',
-            'MriScanTypeID': self.scan_type_id,
+            # C-BIG OVERRIDE START
+            # Remove when updating to LORIS 27
+            'AcquisitionProtocolID': self.scan_type_id,
+            # C-BIG OVERRIDE END
             'FileType': file_type,
             'InsertedByUserID': getpass.getuser(),
             'InsertTime': datetime.datetime.now().timestamp(),
