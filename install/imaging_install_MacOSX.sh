@@ -66,7 +66,6 @@ sudo -S su $USER -c "mkdir -m 2770 -p /data/incoming/";
 ###################################################################################
 echo "Modifying environment script"
 cp $installdir/templates/environment_template $mridir/environment
-sed -i "s#%PROJECT%#$PROJ#g" $mridir/environment
 #Make sure that CIVET stuff are placed in the right place
 #source /data/$PROJ/bin/$mridirname/environment
 export TMPDIR=/tmp

@@ -46,7 +46,6 @@ fi
 ###################################################################################
 echo "Modifying environment script"
 cp $mridir/install/templates/environment_template $mridir/environment
-sed -i "s#%PROJECT%#$PROJ#g" $mridir/environment
 sed -i "s#%MINC_TOOLKIT_DIR%#$MINC_TOOLKIT_DIR#g" $mridir/environment
 #Make sure that CIVET stuff are placed in the right place
 #source /opt/$PROJ/bin/$mridirname/environment
