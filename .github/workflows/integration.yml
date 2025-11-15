@@ -63,7 +63,7 @@ jobs:
         tags: loris-mri
         load: true
         cache-from: type=gha,scope=loris-mri
-        cache-to: type=gha,mode=max,scope=loris-mri
+        cache-to: type=gha,scope=loris-mri
 
     # NOTE: Ideally, we would like to mount the S3 bucket in the Docker image, but since it
     # interacts with the kernel to add a file system, it is hard to do so.
