@@ -215,14 +215,11 @@ def main():
                     # If the suject/session/modality BIDS data already exists
                     # on the destination folder, delete if first
                     # copying the data
-                    if os.path.exists(data_eeg_modality_path):
-                        shutil.rmtree(data_eeg_modality_path)
-                    log_verbose(env, f"Moving {tmp_eeg_modality_path} to {data_eeg_modality_path}")
-                    shutil.copytree(tmp_eeg_modality_path, data_eeg_modality_path, dirs_exist_ok=True)
+                    remove_directory(env, data_eeg_modality_path)
+                    copy_file(env, tmp_eeg_modality_path, data_eeg_modality_path)
 
         # Delete tmp location
-        if os.path.exists(tmp_dir):
-            shutil.rmtree(tmp_dir)
+        remove_directory(env, tmp_dir)
 
         if not error:
             # Set Status = Extracted
