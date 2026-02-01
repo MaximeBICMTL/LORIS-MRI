@@ -1,7 +1,6 @@
 """This class performs database queries for BIDS physiological dataset (EEG, MEG...)"""
 
 import os
-import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -83,42 +82,6 @@ class Physiological:
         self.parameter_type_obj                             = ParameterType(self.db, self.verbose)
         self.physiological_coord_system_db = PhysiologicalCoordSystem(self.db, self.verbose)
         self.point_3d_db = Point3DDB(self.db, self.verbose)
-
-    def determine_file_type(self, file):
-        """
-        Greps all file types defined in the ImagingFileTypes table and checks
-        if the file matches one of the file type. If no match is found, the
-        script will exit with error message and error code.
-
-        :param file: file's name
-         "type file: str
-
-        :return: file's type
-         :rtype: str
-        """
-
-        imaging_file_types = self.db.pselect(
-            query="SELECT type FROM ImagingFileTypes"
-        )
-
-        # if the file type cannot be found in the database, exit now
-        file_type = None
-        for type in imaging_file_types:
-            regex_match = r'' + type['type'] + r'(\.gz)?$'
-            if re.search(regex_match, file):
-                file_type = type['type']
-
-        # exits if could not find a file type
-        if not file_type:
-            message = "\nERROR: File type for " + file + " does not exist " \
-                      "in ImagingFileTypes database table\n"
-            print(message)
-            sys.exit(lib.exitcode.SELECT_FAILURE)
-
-        return file_type
-
-    def grep_file_id_from_hash(self, blake2b_hash):
-        return self.physiological_physiological_file_obj.grep_file_id_from_hash(blake2b_hash)
 
     def insert_physiological_file(self, eeg_file_info, eeg_file_data):
         """

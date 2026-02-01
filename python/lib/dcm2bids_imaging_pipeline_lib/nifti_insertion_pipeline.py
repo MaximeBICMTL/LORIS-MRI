@@ -19,6 +19,7 @@ from lib.imaging_lib.file import register_mri_file
 from lib.imaging_lib.file_parameter import register_mri_file_parameter, register_mri_file_parameters
 from lib.imaging_lib.nifti import add_nifti_spatial_file_parameters
 from lib.imaging_lib.nifti_pic import create_nifti_preview_picture
+from lib.import_bids_dataset.file_type import get_check_bids_imaging_file_type_from_extension
 from lib.logging import log_error_exit, log_verbose
 
 
@@ -655,18 +656,12 @@ class NiftiInsertionPipeline(BasePipeline):
             acquisition_date = datetime.datetime.strptime(
                 scan_param['AcquisitionDateTime'], '%Y-%m-%dT%H:%M:%S.%f'
             ).date()
-        file_type = self.imaging_obj.determine_file_type(nifti_rel_path)
-        if not file_type:
-            log_error_exit(
-                self.env,
-                f"Could not determine file type for {nifti_rel_path}. No entry found in ImagingFileTypes table",
-                lib.exitcode.SELECT_FAILURE,
-            )
+        file_type = get_check_bids_imaging_file_type_from_extension(self.env, Path(nifti_rel_path))
 
         file = register_mri_file(
             self.env,
-            file_type,
             Path(nifti_rel_path),
+            file_type,
             self.session,
             self.scan_type,
             self.mri_scanner,
