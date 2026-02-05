@@ -16,7 +16,6 @@ import lib.utilities as utilities
 from lib.candidate import Candidate
 from lib.config import get_eeg_pre_package_download_dir_path_config, get_eeg_viz_enabled_config
 from lib.database_lib.physiological_event_archive import PhysiologicalEventArchive
-from lib.database_lib.physiological_event_file import PhysiologicalEventFile
 from lib.db.models.physio_file import DbPhysioFile
 from lib.db.queries.physio_file import try_get_physio_file_with_path
 from lib.db.queries.session import try_get_session_with_id
@@ -299,11 +298,10 @@ class Eeg:
             return
 
         for inserted_eeg in inserted_eegs:
-            eeg_file           = inserted_eeg['file']
-            eeg_file_path      = inserted_eeg['file_path']
-            eegjson_file_path  = inserted_eeg['eegjson_file_path']
-            fdt_file_path      = inserted_eeg['fdt_file_path']
-            original_file_data = inserted_eeg['original_file_data']
+            eeg_file: DbPhysioFile = inserted_eeg['file']
+            eegjson_file_path      = inserted_eeg['eegjson_file_path']
+            fdt_file_path          = inserted_eeg['fdt_file_path']
+            original_file_data     = inserted_eeg['original_file_data']
 
             # insert related electrode, channel and event information
             electrode_file_path = self.fetch_and_insert_electrode_file(
@@ -325,7 +323,7 @@ class Eeg:
             )
 
             # archive all files in a tar ball for downloading all files at once
-            files_to_archive: list[str] = [os.path.join(self.data_dir, eeg_file_path)]
+            files_to_archive: list[str] = [os.path.join(self.data_dir, eeg_file.path)]
 
             if eegjson_file_path:
                 files_to_archive.append(os.path.join(self.data_dir, eegjson_file_path))
@@ -343,15 +341,15 @@ class Eeg:
 
                 event_archive_rel_name = os.path.splitext(event_file_paths[0])[0] + ".tgz"
                 self.create_and_insert_event_archive(
-                    event_files_to_archive, event_archive_rel_name, eeg_file.id
+                    event_files_to_archive, event_archive_rel_name, eeg_file
                 )
 
             if channel_file_path:
                 files_to_archive.append(os.path.join(self.data_dir, channel_file_path))
 
-            archive_rel_name = os.path.splitext(eeg_file_path)[0] + ".tgz"
+            archive_rel_name = os.path.splitext(eeg_file.path)[0] + ".tgz"
             self.create_and_insert_archive(
-                files_to_archive, archive_rel_name, eeg_file.id
+                files_to_archive, archive_rel_name, eeg_file
             )
 
             # create data chunks for React visualization
@@ -530,17 +528,15 @@ class Eeg:
                 # and .fdt files in the .set file so it can find the proper file for
                 # visualization and analyses
                 if file_type.name == 'set':
-                    set_full_path = os.path.join(self.data_dir, eeg_path)
+                    set_full_path = os.path.join(self.data_dir, physio_file.path)
                     width_fdt_file = True if 'fdt_file' in eeg_file_data.keys() else False
 
                     file_paths_updated = utilities.update_set_file_path_info(set_full_path, width_fdt_file)
                     if not file_paths_updated:
-                        message = "WARNING: cannot update the set file " + eeg_path + " path info"
-                        print(message)
+                        print(f"WARNING: cannot update the set file {physio_file.path} path info")
 
             inserted_eegs.append({
                 'file': physio_file,
-                'file_path': eeg_path,
                 'eegjson_file_path': sidecar_json_path,
                 'fdt_file_path': fdt_file_path,
                 'original_file_data': eeg_file,
@@ -693,28 +689,24 @@ class Eeg:
         channels_file = BidsEegChannelsTsvFile(Path(bids_channels_file.path)) if bids_channels_file else None
 
         if channels_file is None:
-            message = "WARNING: no channel file associated with " \
-                      "physiological file ID " + str(physiological_file.id)
-            print(message)
+            print(f"WARNING: no channel file associated with physiological file ID {physiological_file.id}")
             return None
-        else:
-            result = physiological.grep_channel_from_physiological_file_id(
-                physiological_file.id
+
+        if physiological_file.channels != []:
+            return physiological_file.channels[0].file_path
+
+        channel_path = os.path.relpath(channels_file.path, self.data_dir)
+        if self.loris_bids_root_dir:
+            # copy the channel file to the LORIS BIDS import directory
+            channel_path = self.copy_file_to_loris_bids_dir(
+                channels_file.path, derivatives
             )
-            channel_path = result[0]['FilePath'] if result else None
-            if not result:
-                channel_path = os.path.relpath(channels_file.path, self.data_dir)
-                if self.loris_bids_root_dir:
-                    # copy the channel file to the LORIS BIDS import directory
-                    channel_path = self.copy_file_to_loris_bids_dir(
-                        channels_file.path, derivatives
-                    )
-                # get the blake2b hash of the channel file
-                blake2 = compute_file_blake2b_hash(channels_file.path)
-                # insert the channel data in the database
-                physiological.insert_channel_file(
-                    channels_file, channel_path, physiological_file, blake2
-                )
+        # get the blake2b hash of the channel file
+        blake2 = compute_file_blake2b_hash(channels_file.path)
+        # insert the channel data in the database
+        physiological.insert_channel_file(
+            channels_file, channel_path, physiological_file, blake2
+        )
 
         return channel_path
 
@@ -757,18 +749,14 @@ class Eeg:
 
         if events_data_file is None:
             message = "WARNING: no events file associated with " \
-                      "physiological file ID " + str(physiological_file.id)
+                      f"physiological file ID {physiological_file.id}"
             print(message)
             return None
         else:
-            physiological_event_file_obj = PhysiologicalEventFile(self.db, self.verbose)
-            event_paths = physiological_event_file_obj.grep_event_paths_from_physiological_file_id(
-                physiological_file.id
-            )
+            event_paths = [event_file.file_path for event_file in physiological_file.event_files]
 
             file_tag_dict = {}
-            if not event_paths:
-                event_paths = []
+            if event_paths == []:
                 # get events.json file and insert
                 # subject-specific metadata
                 event_metadata_file = self.bids_layout.get_nearest(
@@ -784,8 +772,8 @@ class Eeg:
                 inheritance = False
 
                 if not event_metadata_file:
-                    message = '\nWARNING: no events metadata files (events.json) associated ' \
-                              'with physiological file ID ' + str(physiological_file.id)
+                    message = "WARNING: no events metadata files (events.json) associated " \
+                              f"with physiological file ID {physiological_file.id}"
                     print(message)
                 else:
                     event_metadata_path = os.path.relpath(event_metadata_file.path, self.data_dir)
@@ -891,7 +879,7 @@ class Eeg:
 
         return relative_path
 
-    def create_and_insert_archive(self, files_to_archive: list[str], archive_rel_name: str, eeg_file_id: int):
+    def create_and_insert_archive(self, files_to_archive: list[str], archive_rel_name: str, eeg_file: DbPhysioFile):
         """
         Create an archive with all electrophysiology files associated to a
         specific recording (including electrodes.tsv, channels.tsv etc...)
@@ -913,19 +901,18 @@ class Eeg:
 
         # check if archive already inserted in database and matches the one
         # on the filesystem using blake2b hash
-        result = physiological.grep_archive_info_from_file_id(eeg_file_id)
-        if result:
+        if eeg_file.archive is not None:
             if not blake2:
-                message = '\nERROR: no archive was found on the filesystem ' + \
+                message = 'ERROR: no archive was found on the filesystem ' + \
                           'while an entry was found in the database for '   + \
-                          'PhysiologicalFileID = ' + str(eeg_file_id)
+                          f'PhysiologicalFileID = {eeg_file.id}'
                 print(message)
                 exit(lib.exitcode.MISSING_FILES)
-            elif result['Blake2bHash'] != blake2:
+            elif eeg_file.archive.blake2b_hash != blake2:
                 message = '\nERROR: blake2b hash of ' + archive_full_path     +\
                           ' does not match the one stored in the database.'   +\
                           '\nblake2b of ' + archive_full_path + ': ' + blake2 +\
-                          '\nblake2b in the database: ' + result['blake2b_hash']
+                          '\nblake2b in the database: ' + eeg_file.archive.blake2b_hash
                 print(message)
                 exit(lib.exitcode.CORRUPTED_FILE)
             else:
@@ -943,18 +930,23 @@ class Eeg:
         # insert the archive file in physiological_archive
         blake2 = compute_file_blake2b_hash(archive_full_path)
         archive_info = {
-            'PhysiologicalFileID': eeg_file_id,
+            'PhysiologicalFileID': eeg_file.id,
             'Blake2bHash'        : blake2,
             'FilePath'           : archive_rel_name
         }
         physiological.insert_archive_file(archive_info)
 
-    def create_and_insert_event_archive(self, files_to_archive: list[str], archive_rel_name: str, eeg_file_id: int):
+    def create_and_insert_event_archive(
+        self,
+        files_to_archive: list[str],
+        archive_rel_name: str,
+        eeg_file: DbPhysioFile,
+    ):
         """
         Create an archive with all event files associated to a specific recording
         :param files_to_archive: list of files to include in the archive
         :param archive_rel_name: path to the archive relative to data_dir
-        :param eeg_file_id     : PhysiologicalFileID
+        :param eeg_file     : Physiological file object
         """
 
         # check if archive is on the filesystem
@@ -967,21 +959,19 @@ class Eeg:
         # check if archive already inserted in database and matches the one
         # on the filesystem using blake2b hash
         physiological_event_archive_obj = PhysiologicalEventArchive(self.db, self.verbose)
-        results = physiological_event_archive_obj.grep_from_physiological_file_id(eeg_file_id)
 
-        if results:
-            result = results[0]
+        if eeg_file.event_archive is not None:
             if not blake2:
                 message = '\nERROR: no archive was found on the filesystem ' + \
                           'while an entry was found in the database for '   + \
-                          'PhysiologicalFileID = ' + str(eeg_file_id)
+                          'PhysiologicalFileID = ' + str(eeg_file.id)
                 print(message)
                 exit(lib.exitcode.MISSING_FILES)
-            elif result['Blake2bHash'] != blake2:
+            elif eeg_file.event_archive.blake2b_hash != blake2:
                 message = '\nERROR: blake2b hash of ' + archive_full_path     +\
                           ' does not match the one stored in the database.'   +\
                           '\nblake2b of ' + archive_full_path + ': ' + blake2 +\
-                          '\nblake2b in the database: ' + result['blake2b_hash']
+                          '\nblake2b in the database: ' + eeg_file.event_archive.blake2b_hash
                 print(message)
                 exit(lib.exitcode.CORRUPTED_FILE)
             else:
@@ -998,7 +988,7 @@ class Eeg:
 
         # insert the archive into the physiological_annotation_archive table
         blake2 = compute_file_blake2b_hash(archive_full_path)
-        physiological_event_archive_obj.insert(eeg_file_id, blake2, archive_rel_name)
+        physiological_event_archive_obj.insert(eeg_file.id, blake2, archive_rel_name)
 
     def get_archive_paths(self, archive_rel_name):
         package_path = get_eeg_pre_package_download_dir_path_config(self.env)

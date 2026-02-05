@@ -5,6 +5,9 @@ from sqlalchemy import ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.physio_channel as db_physio_channel
+import lib.db.models.physio_event_archive as db_physio_event_archive
+import lib.db.models.physio_event_file as db_physio_event_file
+import lib.db.models.physio_file_archive as db_physio_file_archive
 import lib.db.models.physio_file_parameter as db_phyiso_file_parameter
 import lib.db.models.physio_modality as db_physio_modality
 import lib.db.models.physio_output_type as db_physio_output_type
@@ -28,8 +31,11 @@ class DbPhysioFile(Base):
     index            : Mapped[int | None]      = mapped_column('Index')
     parent_id        : Mapped[int | None]      = mapped_column('ParentID')
 
-    output_type : Mapped['db_physio_output_type.DbPhysioOutputType']       = relationship('DbPhysioOutputType')
-    modality    : Mapped['db_physio_modality.DbPhysioModality | None']     = relationship('DbPhysioModality')
-    session     : Mapped['db_session.DbSession']                           = relationship('DbSession')
-    channels    : Mapped['db_physio_channel.DbPhysioChannel']              = relationship('DbPhysioChannel', back_populates='physio_file')
-    parameters  : Mapped['db_phyiso_file_parameter.DbPhysioFileParameter'] = relationship('DbPhysioFileParameter', back_populates='file')
+    output_type   : Mapped['db_physio_output_type.DbPhysioOutputType']             = relationship('DbPhysioOutputType')
+    modality      : Mapped['db_physio_modality.DbPhysioModality | None']           = relationship('DbPhysioModality')
+    session       : Mapped['db_session.DbSession']                                 = relationship('DbSession')
+    archive       : Mapped['db_physio_file_archive.DbPhysioFileArchive | None']    = relationship('DbPhysioFileArchive', back_populates='physio_file')
+    event_archive : Mapped['db_physio_event_archive.DbPhysioEventArchive | None']  = relationship('DbPhysioEventArchive', back_populates='physio_file')
+    channels      : Mapped[list['db_physio_channel.DbPhysioChannel']]              = relationship('DbPhysioChannel', back_populates='physio_file')
+    parameters    : Mapped[list['db_phyiso_file_parameter.DbPhysioFileParameter']] = relationship('DbPhysioFileParameter', back_populates='file')
+    event_files   : Mapped[list['db_physio_event_file.DbPhysioEventFile']]         = relationship('DbPhysioEventFile', back_populates='physio_file')
