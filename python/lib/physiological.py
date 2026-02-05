@@ -99,48 +99,6 @@ class Physiological:
 
         return results
 
-    def grep_channel_from_physiological_file_id(self, physiological_file_id):
-        """
-        Greps all entries present in the physiological_channel table for a
-        given PhysiologicalFileID and returns its result.
-
-        :param physiological_file_id: physiological file's ID
-         :type physiological_file_id: int
-
-        :return: tuple of dictionaries with one entry in the tuple
-                 corresponding to one entry in physiological_channel
-         :rtype: tuple
-        """
-
-        results = self.db.pselect(
-            query = "SELECT * "
-                    " FROM physiological_channel "
-                    " WHERE PhysiologicalFileID = %s",
-            args  = (physiological_file_id,)
-        )
-
-        return results
-
-    def grep_event_paths_from_physiological_file_id(self, physiological_file_id):
-        """
-        Gets the FilePath of event files given a physiological_file_id
-
-        :param physiological_file_id : Physiological file's ID
-         :type physiological_file_id : int
-
-        :return                      : list of FilePath if any or None
-         :rtype                      : list
-        """
-
-        event_paths = self.db.pselect(
-            query = "SELECT DISTINCT FilePath "
-                    "FROM physiological_event_file "
-                    "WHERE PhysiologicalFileID = %s",
-            args=(physiological_file_id,)
-        )
-
-        event_paths = [event_path['FilePath'] for event_path in event_paths]
-
     def insert_electrode_file(self, electrode_data, electrode_file,
                               physiological_file: DbPhysioFile, blake2):
         """
@@ -816,27 +774,6 @@ class Physiological:
                     )
         # insert blake2b hash of task event file into physiological_parameter_file
         insert_physio_file_parameter(self.env, physiological_file, 'event_file_blake2b_hash', blake2)
-
-    def grep_archive_info_from_file_id(self, physiological_file_id):
-        """
-        Greps the physiological file ID from the physiological_file table. If
-        it cannot be found, the method will return None.
-
-        :param physiological_file_id: PhysiologicalFileID to use in the query
-         :type physiological_file_id: int
-
-        :return: result of the query from the physiological_archive table
-         :rtype: dict
-        """
-
-        query = "SELECT * " \
-                "FROM physiological_archive " \
-                "WHERE PhysiologicalFileID = %s"
-
-        results = self.db.pselect(query=query, args=(physiological_file_id,))
-
-        # return the result
-        return results[0] if results else None
 
     def insert_archive_file(self, archive_info):
         """
