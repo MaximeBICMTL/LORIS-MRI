@@ -29,6 +29,7 @@ from lib.import_bids_dataset.physio import (
     get_check_bids_physio_output_type,
 )
 from lib.logging import log
+from lib.physio.chunking import create_physio_channels_chunks
 from lib.physio.file import insert_physio_file
 from lib.physio.parameters import insert_physio_file_parameters
 from lib.physiological import Physiological
@@ -297,8 +298,6 @@ class Eeg:
         if not inserted_eegs:
             return
 
-        physiological = Physiological(self.env, self.db, self.verbose)
-
         for inserted_eeg in inserted_eegs:
             eeg_file           = inserted_eeg['file']
             eeg_file_path      = inserted_eeg['file_path']
@@ -358,7 +357,7 @@ class Eeg:
             # create data chunks for React visualization
             eeg_viz_enabled = get_eeg_viz_enabled_config(self.env)
             if eeg_viz_enabled:
-                physiological.create_chunks_for_visualization(eeg_file, self.data_dir)
+                create_physio_channels_chunks(self.env, eeg_file, Path(original_file_data.path))
 
     def fetch_and_insert_eeg_files(self, derivatives=False, detect=True):
         """

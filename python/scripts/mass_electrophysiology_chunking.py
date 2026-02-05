@@ -9,11 +9,10 @@ import lib.exitcode
 import lib.utilities
 from lib.config import get_data_dir_path_config
 from lib.config_file import load_config
-from lib.database import Database
 from lib.db.queries.physio_file import try_get_physio_file_with_id
 from lib.env import Env
 from lib.make_env import make_env
-from lib.physiological import Physiological
+from lib.physio.chunking import create_physio_channels_chunks
 
 
 def main():
@@ -69,7 +68,7 @@ def main():
         make_chunks(env, smallest_id, config_file, verbose)
     else:
         for file_id in range(smallest_id, largest_id + 1):
-            make_chunks(env, file_id, config_file, verbose)
+            make_chunks(env, file_id)
 
 
 def input_error_checking(smallest_id, largest_id, usage):
@@ -106,34 +105,19 @@ def input_error_checking(smallest_id, largest_id, usage):
         sys.exit(lib.exitcode.INVALID_ARG)
 
 
-def make_chunks(env: Env, physiological_file_id, config_file, verbose):
+def make_chunks(env: Env, physio_file_id: int):
     """
-    Call the function create_chunks_for_visualization of the Physiology class on
-    the PhysiologicalFileID provided as argument to this function.
-
-    :param physiological_file_id: PhysiologicalFileID of the file to chunk
-     :type physiological_file_id: int
-    :param config_file: path to the config file with database connection information
-     :type config_file: str
-    :param verbose    : flag for more printing if set
-     :type verbose    : bool
+    Call the channel signal chunking script on the provided physiological file.
     """
-
-    # database connection
-    db = Database(config_file.mysql, verbose)
-    db.connect()
 
     # grep config settings from the Config module
     data_dir = get_data_dir_path_config(env)
 
-    # load the Physiological object
-    physiological = Physiological(env, db, verbose)
-
     # create the chunked dataset
-    physio_file = try_get_physio_file_with_id(env.db, physiological_file_id)
+    physio_file = try_get_physio_file_with_id(env.db, physio_file_id)
     if physio_file is not None:
         print(f"Chunking physiological file ID {physio_file.id}")
-        physiological.create_chunks_for_visualization(physio_file, data_dir)
+        create_physio_channels_chunks(env, physio_file, data_dir / physio_file.path)
 
 
 if __name__ == "__main__":
