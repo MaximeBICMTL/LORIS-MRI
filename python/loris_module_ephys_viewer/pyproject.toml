@@ -1,0 +1,21 @@
+[project]
+name = "loris-module-ephys-viewer"
+version = "27.0.0"
+description = "The LORIS electrophysiology viewer module Python API"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+requires-python = ">= 3.11"
+dependencies=[
+    "fastapi"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/loris_module_ephys_viewer"]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+src = ["src"]
