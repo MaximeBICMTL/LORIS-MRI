@@ -74,7 +74,6 @@ include = [
     "python/lib/import_bids_dataset",
     "python/lib/import_dicom_study",
     "python/lib/physio",
-    "python/lib/bids.py",
     "python/lib/config.py",
     "python/lib/config_file.py",
     "python/lib/env.py",

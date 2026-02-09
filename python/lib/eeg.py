@@ -9,6 +9,7 @@ from loris_bids_reader.eeg.channels import BidsEegChannelsTsvFile
 from loris_bids_reader.eeg.sidecar import BidsEegSidecarJsonFile
 from loris_bids_reader.files.events import BidsEventsTsvFile
 from loris_bids_reader.files.scans import BidsScansTsvFile
+from loris_bids_reader.info import BidsDataTypeInfo
 from loris_utils.crypto import compute_file_blake2b_hash
 
 import lib.exitcode
@@ -74,12 +75,10 @@ class Eeg:
                         loris_bids_root_dir + loris_bids_eeg_rel_dir, verbose
                     )
                     Eeg(
+                        env,
                         bids_reader   = bids_reader,
-                        bids_sub_id   = row['bids_sub_id'],
-                        bids_ses_id   = row['bids_ses_id'],
-                        bids_modality = modality,
+                        bids_info     = bids_info,
                         db            = db,
-                        verbose       = verbose,
                         data_dir      = data_dir,
                         default_visit_label    = default_bids_vl,
                         loris_bids_eeg_rel_dir = loris_bids_eeg_rel_dir,
@@ -91,24 +90,17 @@ class Eeg:
         db.disconnect()
     """
 
-    def __init__(self, env: Env, bids_reader, bids_sub_id, bids_ses_id, bids_modality, db,
-                 verbose, data_dir, default_visit_label, loris_bids_eeg_rel_dir,
+    def __init__(self, env: Env, bids_reader, bids_info: BidsDataTypeInfo, db,
+                 data_dir, default_visit_label, loris_bids_eeg_rel_dir,
                  loris_bids_root_dir, dataset_tag_dict, dataset_type):
         """
         Constructor method for the Eeg class.
 
         :param bids_reader  : dictionary with BIDS reader information
          :type bids_reader  : dict
-        :param bids_sub_id  : BIDS subject ID (that will be used as PSCID)
-         :type bids_sub_id  : str
-        :param bids_ses_id  : BIDS session ID (that will be used for the visit label)
-         :type bids_ses_id  : str
-        :param bids_modality: BIDS modality (a.k.a. EEG)
-         :tyoe bids_modality: str
+        :param bids_info    : the BIDS data type information
         :param db           : Database class object
          :type db           : object
-        :param verbose      : whether to be verbose
-         :type verbose      : bool
         :param data_dir     : LORIS data directory path (usually /data/PROJECT/data)
          :type data_dir     : str
         :param default_visit_label   : default visit label to be used if no BIDS
@@ -137,16 +129,13 @@ class Eeg:
         self.data_dir               = data_dir
 
         # load bids subject, visit and modality
-        self.bids_sub_id        = bids_sub_id
-        self.bids_ses_id        = bids_ses_id
-        self.bids_modality      = bids_modality
+        self.bids_info = bids_info
 
         # load dataset tag dict. Used to ensure HED tags aren't duplicated
         self.dataset_tag_dict   = dataset_tag_dict
 
-        # load database handler object and verbose bool
-        self.db      = db
-        self.verbose = verbose
+        # load database handler object
+        self.db = db
 
         # find corresponding CandID and SessionID in LORIS
         self.loris_cand_info = self.get_loris_cand_info()
@@ -161,7 +150,7 @@ class Eeg:
 
         self.cohort_id   = None
         if bids_reader.participants_info is not None:
-            row = bids_reader.participants_info.get_row(self.bids_sub_id)
+            row = bids_reader.participants_info.get_row(self.bids_info.subject)
             if 'cohort' in row.data:
                 cohort_info = db.pselect(
                     "SELECT CohortID FROM cohort WHERE title = %s",
@@ -174,8 +163,12 @@ class Eeg:
 
         # check if a tsv with acquisition dates or age is available for the subject
         self.scans_file = None
-        if self.bids_layout.get(suffix='scans', subject=self.bids_sub_id, return_type='filename'):
-            scans_file_path = self.bids_layout.get(suffix='scans', subject=self.bids_sub_id, return_type='filename')[0]
+        if self.bids_layout.get(suffix='scans', subject=self.bids_info.subject, return_type='filename'):
+            scans_file_path = self.bids_layout.get(
+                suffix='scans',
+                subject=self.bids_info.subject,
+                return_type='filename',
+            )[0]
             self.scans_file = BidsScansTsvFile(Path(scans_file_path))
 
         # register the data into LORIS
@@ -197,15 +190,15 @@ class Eeg:
          :rtype: list
         """
 
-        candidate = Candidate(verbose=self.verbose, cand_id=self.bids_sub_id)
+        candidate = Candidate(verbose=self.env.verbose, cand_id=self.bids_info.subject)
         loris_cand_info = candidate.get_candidate_info_from_loris(self.db)
 
         if not loris_cand_info:
-            candidate = Candidate(verbose=self.verbose, psc_id=self.bids_sub_id)
+            candidate = Candidate(verbose=self.env.verbose, psc_id=self.bids_info.subject)
             loris_cand_info = candidate.get_candidate_info_from_loris(self.db)
 
         if not loris_cand_info:
-            print("Candidate " + self.bids_sub_id + " not found. You can retry with the --createcandidate option.\n")
+            print(f"Candidate {self.bids_info.subject} not found. You can retry with the --createcandidate option.\n")
             sys.exit(lib.exitcode.CANDIDATE_NOT_FOUND)
 
         return loris_cand_info
@@ -222,10 +215,10 @@ class Eeg:
 
         # check if there are any visit label in BIDS structure, if not,
         # will use the default visit label set in the config module
-        visit_label = self.bids_ses_id if self.bids_ses_id else self.default_vl
+        visit_label = self.bids_info.session if self.bids_info.session is not None else self.default_vl
 
         session = Session(
-            self.db, self.verbose, self.cand_id, visit_label,
+            self.db, self.env.verbose, self.cand_id, visit_label,
             self.center_id, self.project_id, self.cohort_id
         )
         loris_vl_info = session.get_session_info_from_loris()
@@ -255,18 +248,18 @@ class Eeg:
          :rtype: list
         """
 
-        if self.bids_ses_id:
+        if self.bids_info.session is not None:
             return self.bids_layout.get(
-                subject     = self.bids_sub_id,
-                session     = self.bids_ses_id,
-                datatype    = self.bids_modality,
+                subject     = self.bids_info.subject,
+                session     = self.bids_info.session,
+                datatype    = self.bids_info.data_type,
                 suffix      = bids_type,
                 return_type = 'filename'
             )
         else:
             return self.bids_layout.get(
-                subject     = self.bids_sub_id,
-                datatype    = self.bids_modality,
+                subject     = self.bids_info.subject,
+                datatype    = self.bids_info.data_type,
                 suffix      = bids_type,
                 return_type = 'filename'
             )
@@ -381,17 +374,17 @@ class Eeg:
         if detect:
             # TODO if derivatives, grep the source file as well as the input file ID???
             eeg_files = self.bids_layout.get(
-                subject   = self.bids_sub_id,
-                session   = self.bids_ses_id,
+                subject   = self.bids_info.subject,
+                session   = self.bids_info.session,
                 scope     = 'derivatives' if derivatives else 'raw',
-                suffix    = self.bids_modality,
+                suffix    = self.bids_info.data_type,
                 extension = ['set', 'edf', 'vhdr', 'vmrk', 'eeg', 'bdf']
             )
         else:
             eeg_files = self.bids_layout.get(
-                subject   = self.bids_sub_id,
-                session   = self.bids_ses_id,
-                suffix    = self.bids_modality,
+                subject   = self.bids_info.subject,
+                session   = self.bids_info.session,
+                suffix    = self.bids_info.data_type,
                 extension = ['set', 'edf', 'vhdr', 'vmrk', 'eeg', 'bdf']
             )
 
@@ -405,7 +398,7 @@ class Eeg:
                 return_type = 'tuple',
                 strict=False,
                 extension = 'json',
-                suffix = self.bids_modality,
+                suffix = self.bids_info.data_type,
                 all_ = False,
                 full_search = False,
             )
@@ -461,7 +454,7 @@ class Eeg:
                         # copy the scans.tsv file to the LORIS BIDS import directory
                         scans_path = copy_scans_tsv_file_to_loris_bids_dir(
                             self.scans_file,
-                            self.bids_sub_id,
+                            self.bids_info.subject,
                             self.loris_bids_root_dir,
                             self.data_dir,
                         )
@@ -497,7 +490,7 @@ class Eeg:
             eeg_file_data['physiological_file_blake2b_hash'] = blake2
 
             # grep the modality ID from physiological_modality table
-            modality = get_check_bids_physio_modality(self.env, self.bids_modality)
+            modality = get_check_bids_physio_modality(self.env, self.bids_info.data_type)
 
             if self.loris_bids_root_dir:
                 # copy the eeg_file to the LORIS BIDS import directory
@@ -566,7 +559,7 @@ class Eeg:
 
         # load the Physiological object that will be used to insert the
         # physiological data into the database
-        physiological = Physiological(self.env, self.db, self.verbose)
+        physiological = Physiological(self.env, self.db, self.env.verbose)
 
         electrode_files = self.bids_layout.get_nearest(
             original_physiological_file_path,
@@ -615,7 +608,7 @@ class Eeg:
                         suffix = 'coordsystem',
                         all_ = False,
                         full_search = False,
-                        subject=self.bids_sub_id,
+                        subject=self.bids_info.subject,
                     )
                     if not coordsystem_metadata_file:
                         message = '\nWARNING: no electrode metadata files (coordsystem.json) ' \
@@ -675,7 +668,7 @@ class Eeg:
 
         # load the Physiological object that will be used to insert the
         # physiological data into the database
-        physiological = Physiological(self.env, self.db, self.verbose)
+        physiological = Physiological(self.env, self.db, self.env.verbose)
 
         bids_channels_file = self.bids_layout.get_nearest(
             original_physiological_file_path,
@@ -734,7 +727,7 @@ class Eeg:
 
         # load the Physiological object that will be used to insert the
         # physiological data into the database
-        physiological = Physiological(self.env, self.db, self.verbose)
+        physiological = Physiological(self.env, self.db, self.env.verbose)
 
         bids_events_data_file = self.bids_layout.get_nearest(
             original_physiological_file_path,
@@ -767,7 +760,7 @@ class Eeg:
                     suffix = 'events',
                     all_ = False,
                     full_search = False,
-                    subject=self.bids_sub_id,
+                    subject=self.bids_info.subject,
                 )
                 inheritance = False
 
@@ -851,7 +844,7 @@ class Eeg:
             copy_file = ""
             if not inheritance:
                 copy_file = self.loris_bids_eeg_rel_dir
-            if self.bids_ses_id:
+            if self.bids_info.session is not None:
                 copy_file = os.path.join(copy_file, os.path.basename(file))
             else:
                 # make sure the ses- is included in the new filename if using
@@ -859,8 +852,8 @@ class Eeg:
                 copy_file = os.path.join(
                     copy_file,
                     os.path.basename(file).replace(
-                        "sub-" + self.data_type.subject.label,
-                        "sub-" + self.data_type.subject.label + "_ses-" + self.default_vl
+                        f'sub-{self.bids_info.subject}',
+                        f'sub-{self.bids_info.subject}_ses-{self.default_vl}'
                     )
                 )
             copy_file = self.loris_bids_root_dir + copy_file
@@ -868,11 +861,11 @@ class Eeg:
         # create the directory if it does not exist
         lib.utilities.create_dir(
             os.path.dirname(copy_file),
-            self.verbose
+            self.env.verbose
         )
 
         # copy the file
-        utilities.copy_file(file, copy_file, self.verbose)
+        utilities.copy_file(file, copy_file, self.env.verbose)
 
         # determine the relative path and return it
         relative_path = os.path.relpath(copy_file, self.data_dir)
@@ -890,7 +883,7 @@ class Eeg:
 
         # load the Physiological object that will be used to insert the
         # physiological archive into the database
-        physiological = Physiological(self.env, self.db, self.verbose)
+        physiological = Physiological(self.env, self.db, self.env.verbose)
 
         # check if archive is on the filesystem
         (archive_rel_name, archive_full_path) = self.get_archive_paths(archive_rel_name)
@@ -921,7 +914,7 @@ class Eeg:
         # create the archive directory if it does not exist
         lib.utilities.create_dir(
             os.path.dirname(archive_full_path),
-            self.verbose
+            self.env.verbose
         )
 
         # create the archive file
@@ -958,7 +951,7 @@ class Eeg:
 
         # check if archive already inserted in database and matches the one
         # on the filesystem using blake2b hash
-        physiological_event_archive_obj = PhysiologicalEventArchive(self.db, self.verbose)
+        physiological_event_archive_obj = PhysiologicalEventArchive(self.db, self.env.verbose)
 
         if eeg_file.event_archive is not None:
             if not blake2:
@@ -980,7 +973,7 @@ class Eeg:
         # create the archive directory if it does not exist
         lib.utilities.create_dir(
             os.path.dirname(archive_full_path),
-            self.verbose
+            self.env.verbose
         )
 
         # create the archive file
