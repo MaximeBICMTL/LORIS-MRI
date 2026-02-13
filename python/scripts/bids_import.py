@@ -8,6 +8,7 @@ import os
 import re
 import sys
 
+from loris_bids_reader.info import BidsDataTypeInfo
 from loris_utils.crypto import compute_file_blake2b_hash
 
 import lib.exitcode
@@ -324,11 +325,8 @@ def read_and_insert_bids(
                 Eeg(
                     env,
                     bids_reader   = bids_reader,
-                    bids_sub_id   = row['bids_sub_id'],
-                    bids_ses_id   = row['bids_ses_id'],
-                    bids_modality = modality,
+                    bids_info     = BidsDataTypeInfo(row['bids_sub_id'], row['bids_ses_id'], modality),
                     db            = db,
-                    verbose       = verbose,
                     data_dir      = data_dir,
                     default_visit_label    = default_bids_vl,
                     loris_bids_eeg_rel_dir = loris_bids_modality_rel_dir,
