@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from loris_bids_reader.files.participants import BidsParticipantTsvRow
+
 
 @dataclass
 class BidsSubjectInfo:
@@ -10,6 +12,11 @@ class BidsSubjectInfo:
     subject: str
     """
     The BIDS subject label.
+    """
+
+    participant_row: BidsParticipantTsvRow | None
+    """
+    The BIDS `participants.tsv` row of this subject, if any.
     """
 
 
