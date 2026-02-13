@@ -18,10 +18,16 @@ from lib.candidate import Candidate
 from lib.config import get_eeg_pre_package_download_dir_path_config, get_eeg_viz_enabled_config
 from lib.database_lib.physiological_event_archive import PhysiologicalEventArchive
 from lib.database_lib.physiological_event_file import PhysiologicalEventFile
-from lib.database_lib.physiological_modality import PhysiologicalModality
-from lib.database_lib.physiological_output_type import PhysiologicalOutputType
+from lib.db.queries.physio_file import try_get_physio_file_with_path
 from lib.env import Env
 from lib.import_bids_dataset.copy_files import copy_scans_tsv_file_to_loris_bids_dir
+from lib.import_bids_dataset.file_type import get_check_bids_imaging_file_type_from_extension
+from lib.import_bids_dataset.physio import (
+    get_check_bids_physio_file_hash,
+    get_check_bids_physio_modality,
+    get_check_bids_physio_output_type,
+)
+from lib.logging import log
 from lib.physiological import Physiological
 from lib.session import Session
 
@@ -432,18 +438,18 @@ class Eeg:
                 json_blake2 = compute_file_blake2b_hash(sidecar_json.path)
                 eeg_file_data['physiological_json_file_blake2b_hash'] = json_blake2
 
+            eeg_file_path = Path(eeg_file.path)
+
             # greps the file type from the ImagingFileTypes table
-            file_type = physiological.determine_file_type(eeg_file.path)
+            file_type = get_check_bids_imaging_file_type_from_extension(self.env, eeg_file_path)
 
             # grep the output type from the physiological_output_type table
-            output_type = 'derivative' if derivatives else 'raw'
-            output_type_obj = PhysiologicalOutputType(self.db, self.verbose)
-            output_type_id = output_type_obj.grep_id_from_output_type(output_type)
+            output_type = get_check_bids_physio_output_type(self.env, 'derivative' if derivatives else 'raw')
 
             # get the acquisition date of the EEG file or the age at the time of the EEG recording
             eeg_acq_time = None
             if self.scans_file is not None:
-                scan_info = self.scans_file.get_row(Path(eeg_file.path))
+                scan_info = self.scans_file.get_row(eeg_file_path)
                 if scan_info is not None:
                     try:
                         eeg_acq_time = scan_info.get_acquisition_time()
@@ -468,7 +474,7 @@ class Eeg:
             # if file type is set and fdt file exists, append fdt path to the
             # eeg_file_data dictionary
             fdt_file_path = None
-            if file_type == 'set' and fdt_file:
+            if file_type.name == 'set' and fdt_file:
                 fdt_file_path = os.path.relpath(fdt_file, self.data_dir)
                 if self.loris_bids_root_dir:
                     # copy the fdt file to the LORIS BIDS import directory
@@ -480,65 +486,62 @@ class Eeg:
                 fdt_blake2 = compute_file_blake2b_hash(fdt_file.path)
                 eeg_file_data['physiological_fdt_file_blake2b_hash'] = fdt_blake2
 
+            # check that the file is not already inserted before inserting it
+            eeg_path = os.path.relpath(eeg_file.path, self.data_dir)
+            loris_eeg_file = try_get_physio_file_with_path(self.env.db, Path(eeg_path))
+            if loris_eeg_file is not None:
+                log(self.env, f"Skipping already inserted file '{eeg_path}'.")
+                continue
+
             # append the blake2b to the eeg_file_data dictionary
-            blake2 = compute_file_blake2b_hash(eeg_file.path)
+            blake2 = get_check_bids_physio_file_hash(self.env, Path(eeg_file.path))
             eeg_file_data['physiological_file_blake2b_hash'] = blake2
 
-            # check that the file using blake2b is not already inserted before
-            # inserting it
-            result         = physiological.grep_file_id_from_hash(blake2)
-            physio_file_id = result['PhysiologicalFileID'] if result else None
-            eeg_path       = result['FilePath']            if result else None
+            # grep the modality ID from physiological_modality table
+            modality = get_check_bids_physio_modality(self.env, self.bids_modality)
 
-            physiological_modality = PhysiologicalModality(self.db, self.verbose)
-
-            if not physio_file_id:
-                # grep the modality ID from physiological_modality table
-                modality_id = physiological_modality.grep_id_from_modality_value(self.bids_modality)
-
-                eeg_path = os.path.relpath(eeg_file.path, self.data_dir)
-                if self.loris_bids_root_dir:
-                    # copy the eeg_file to the LORIS BIDS import directory
-                    eeg_path = self.copy_file_to_loris_bids_dir(
-                        eeg_file.path, derivatives
-                    )
-
-                # insert the file along with its information into
-                # physiological_file and physiological_parameter_file tables
-                eeg_file_info = {
-                    'FileType': file_type,
-                    'FilePath': eeg_path,
-                    'SessionID': self.session_id,
-                    'AcquisitionTime': eeg_acq_time,
-                    'InsertedByUser': getpass.getuser(),
-                    'PhysiologicalOutputTypeID': output_type_id,
-                    'PhysiologicalModalityID': modality_id
-                }
-                physio_file_id = physiological.insert_physiological_file(
-                    eeg_file_info, eeg_file_data
+            if self.loris_bids_root_dir:
+                # copy the eeg_file to the LORIS BIDS import directory
+                eeg_path = self.copy_file_to_loris_bids_dir(
+                    eeg_file.path, derivatives
                 )
 
-                if self.loris_bids_root_dir:
-                    # If we copy the file in assembly_bids and
-                    # if the EEG file was a set file, then update the filename for the .set
-                    # and .fdt files in the .set file so it can find the proper file for
-                    # visualization and analyses
-                    if file_type == 'set':
-                        set_full_path = os.path.join(self.data_dir, eeg_path)
-                        width_fdt_file = True if 'fdt_file' in eeg_file_data.keys() else False
+            # insert the file along with its information into
+            # physiological_file and physiological_parameter_file tables
+            eeg_file_info = {
+                'FileType': file_type.name,
+                'FilePath': eeg_path,
+                'SessionID': self.session_id,
+                'AcquisitionTime': eeg_acq_time,
+                'InsertedByUser': getpass.getuser(),
+                'PhysiologicalOutputTypeID': output_type.id,
+                'PhysiologicalModalityID': modality.id
+            }
+            physio_file_id = physiological.insert_physiological_file(
+                eeg_file_info, eeg_file_data
+            )
 
-                        file_paths_updated = utilities.update_set_file_path_info(set_full_path, width_fdt_file)
-                        if not file_paths_updated:
-                            message = "WARNING: cannot update the set file " + eeg_path + " path info"
-                            print(message)
+            if self.loris_bids_root_dir:
+                # If we copy the file in assembly_bids and
+                # if the EEG file was a set file, then update the filename for the .set
+                # and .fdt files in the .set file so it can find the proper file for
+                # visualization and analyses
+                if file_type.name == 'set':
+                    set_full_path = os.path.join(self.data_dir, eeg_path)
+                    width_fdt_file = True if 'fdt_file' in eeg_file_data.keys() else False
 
-                inserted_eegs.append({
-                    'file_id': physio_file_id,
-                    'file_path': eeg_path,
-                    'eegjson_file_path': sidecar_json_path,
-                    'fdt_file_path': fdt_file_path,
-                    'original_file_data': eeg_file,
-                })
+                    file_paths_updated = utilities.update_set_file_path_info(set_full_path, width_fdt_file)
+                    if not file_paths_updated:
+                        message = "WARNING: cannot update the set file " + eeg_path + " path info"
+                        print(message)
+
+            inserted_eegs.append({
+                'file_id': physio_file_id,
+                'file_path': eeg_path,
+                'eegjson_file_path': sidecar_json_path,
+                'fdt_file_path': fdt_file_path,
+                'original_file_data': eeg_file,
+            })
 
         return inserted_eegs
 

@@ -339,6 +339,7 @@ def read_and_insert_bids(
 
             elif modality in ['anat', 'dwi', 'fmap', 'func']:
                 Mri(
+                    env,
                     bids_reader   = bids_reader,
                     bids_sub_id   = row['bids_sub_id'],
                     bids_ses_id   = row['bids_ses_id'],
