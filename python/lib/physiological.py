@@ -1,16 +1,11 @@
 """This class performs database queries for BIDS physiological dataset (EEG, MEG...)"""
 
-import os
-import subprocess
-import sys
 from dataclasses import dataclass
 from functools import reduce
 
 from loris_bids_reader.eeg.channels import BidsEegChannelsTsvFile
 from loris_bids_reader.files.events import OPTIONAL_EVENT_FIELDS, BidsEventsTsvFile
 
-import lib.exitcode
-from lib.config import get_eeg_chunks_dir_path_config
 from lib.database_lib.bids_event_mapping import BidsEventMapping
 from lib.database_lib.physiological_coord_system import PhysiologicalCoordSystem
 from lib.database_lib.physiological_event_file import PhysiologicalEventFile
@@ -864,94 +859,3 @@ class Physiological:
             column_names = archive_fields,
             values       = archive_values
         )
-
-    def grep_parameter_value_from_file_id(self, physiological_file_id, param_name):
-        """
-        Greps the value stored in physiological_parameter_file for a given
-        PhysiologicalFileID and parameter name (from the parameter_type table).
-
-        :param physiological_file_id: PhysiologicalFileID to use in the query
-         :type physiological_file_id: int
-        :param param_name           : parameter name to use in the query
-         :type param_name           : str
-
-        :return: result of the query from the physiological_parameter_file table
-         :rtype: dict
-        """
-
-        query = "SELECT Value " \
-                "FROM physiological_parameter_file " \
-                "JOIN parameter_type USING (ParameterTypeID) " \
-                "WHERE PhysiologicalFileID = %s AND Name = %s"
-
-        results = self.db.pselect(
-            query = query,
-            args  = (physiological_file_id, param_name)
-        )
-
-        # return the result
-        return results[0] if results else None
-
-    def create_chunks_for_visualization(self, physio_file: DbPhysioFile, data_dir):
-        """
-        Calls chunking scripts if no chunk datasets yet available for
-        PhysiologicalFileID based on the file type of the original
-        electrophysiology dataset.
-
-        :param physio_file: Physiological file object of the dataset to chunk
-        :param data_dir      : LORIS data directory (/data/%PROJECT%/data)
-         :type data_dir      : str
-        """
-
-        # check if chunks already exists for this PhysiologicalFileID
-        results    = self.grep_parameter_value_from_file_id(
-            physio_file.id, 'electrophysiology_chunked_dataset_path'
-        )
-        chunk_path = results['Value'] if results else None
-
-        # No chunks found
-        if not chunk_path:
-            script    = None
-            chunk_root_dir_config = get_eeg_chunks_dir_path_config(self.env)
-            chunk_root_dir = chunk_root_dir_config
-            file_path_parts = physio_file.path.parts
-            if chunk_root_dir_config:
-                chunk_root_dir = chunk_root_dir_config
-            else:
-                chunk_root_dir = os.path.join(data_dir, file_path_parts[0])
-
-            chunk_root_dir = os.path.join(chunk_root_dir, f'{file_path_parts[1]}_chunks')
-
-            full_file_path = os.path.join(data_dir, physio_file.path)
-
-            # determine which script to run based on the file type
-            match physio_file.type:
-                case 'set':
-                    script = 'eeglab-to-chunks'
-                case 'edf':
-                    script = 'edf-to-chunks'
-
-            command = script + ' ' + full_file_path + ' --destination ' + chunk_root_dir
-
-            # chunk the electrophysiology dataset if a command was determined above
-            try:
-                subprocess.call(
-                    command,
-                    shell = True,
-                    stdout = open(os.devnull, 'wb')
-                )
-            except subprocess.CalledProcessError as err:
-                print(f'ERROR: {script} execution failure. Error was:\n {err}')
-                sys.exit(lib.exitcode.CHUNK_CREATION_FAILURE)
-            except OSError:
-                print('ERROR: ' + script + ' not found')
-                sys.exit(lib.exitcode.CHUNK_CREATION_FAILURE)
-
-            chunk_path = os.path.join(chunk_root_dir, os.path.splitext(physio_file.path.name)[0] + '.chunks')
-            if os.path.isdir(chunk_path):
-                insert_physio_file_parameter(
-                    self.env,
-                    physio_file,
-                    'electrophysiology_chunked_dataset_path',
-                    os.path.relpath(chunk_path, data_dir),
-                )
