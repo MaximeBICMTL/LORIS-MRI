@@ -13,8 +13,10 @@ from loris_utils.crypto import compute_file_blake2b_hash
 import lib.exitcode
 import lib.utilities as utilities
 from lib.candidate import Candidate
+from lib.env import Env
 from lib.imaging import Imaging
 from lib.import_bids_dataset.copy_files import copy_scans_tsv_file_to_loris_bids_dir
+from lib.import_bids_dataset.file_type import get_check_bids_imaging_file_type_from_extension
 from lib.session import Session
 
 
@@ -72,7 +74,7 @@ class Mri:
         db.disconnect()
     """
 
-    def __init__(self, bids_reader, bids_sub_id, bids_ses_id, bids_modality, db,
+    def __init__(self, env: Env, bids_reader, bids_sub_id, bids_ses_id, bids_modality, db,
                  verbose, data_dir, default_visit_label,
                  loris_bids_mri_rel_dir, loris_bids_root_dir):
 
@@ -93,6 +95,8 @@ class Mri:
                        'fieldmap', 'epi'
                      ]
         }
+
+        self.env = env
 
         # load bids objects
         self.bids_reader = bids_reader
@@ -303,12 +307,7 @@ class Mri:
             file_parameters['bids_json_file_blake2b_hash'] = json_blake2
 
         # grep the file type from the ImagingFileTypes table
-        file_type = imaging.determine_file_type(nifti_file.filename)
-        if not file_type:
-            message = "\nERROR: File type for " + nifti_file.filename \
-                      + " does not exist in ImagingFileTypes database table\n"
-            print(message)
-            sys.exit(lib.exitcode.SELECT_FAILURE)
+        file_type = get_check_bids_imaging_file_type_from_extension(self.env, Path(nifti_file.filename))
 
         # determine the output type
         output_type = 'derivatives' if derivatives else 'native'
@@ -390,7 +389,7 @@ class Mri:
             phase_enc_dir = file_parameters['PhaseEncodingDirection'] \
                 if 'PhaseEncodingDirection' in file_parameters.keys() else None
             file_info = {
-                'FileType'        : file_type,
+                'FileType'        : file_type.name,
                 'File'            : file_path,
                 'SessionID'       : self.session_id,
                 'InsertedByUserID': getpass.getuser(),
