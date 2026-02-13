@@ -152,7 +152,8 @@ class BidsReader:
         if self.verbose:
             print('Validating the list of participants...')
 
-        subjects = self.bids_layout.get_subjects()
+        self.subjects = self.bids_layout.get_subjects()
+        subjects = self.subjects.copy()
 
         mismatch_message = ("\nERROR: Participant ID mismatch between "
                             "participants.tsv and raw data found in the BIDS "
@@ -161,15 +162,13 @@ class BidsReader:
         # check that all subjects listed in participants_info are also in
         # subjects array and vice versa
         for row in participants_info.rows:
-            # remove the "sub-" in front of the subject ID if present
-            row.data['participant_id'] = row.data['participant_id'].replace('sub-', '')
-            if row.data['participant_id'] not in subjects:
+            if row.participant_id not in subjects:
                 print(mismatch_message)
-                print(row.data['participant_id'] + 'is missing from the BIDS Layout')
+                print(row.participant_id + 'is missing from the BIDS Layout')
                 print('List of subjects parsed by the BIDS layout: ' + ', '.join(subjects))
                 sys.exit(lib.exitcode.BIDS_CANDIDATE_MISMATCH)
             # remove the subject from the list of subjects
-            subjects.remove(row.data['participant_id'])
+            subjects.remove(row.participant_id)
         # check that no subjects are left in subjects array
         if subjects:
             print(mismatch_message)
@@ -195,8 +194,8 @@ class BidsReader:
 
         if self.participants_info is not None:
             for row in self.participants_info.rows:
-                ses = self.bids_layout.get_sessions(subject=row.data['participant_id'])
-                cand_sessions[row.data['participant_id']] = ses
+                ses = self.bids_layout.get_sessions(subject=row.participant_id)
+                cand_sessions[row.participant_id] = ses
         else:
             subjects = self.bids_layout.get_subjects()
             for subject in subjects:
