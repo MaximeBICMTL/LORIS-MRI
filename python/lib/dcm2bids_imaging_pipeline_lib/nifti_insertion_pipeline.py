@@ -10,7 +10,6 @@ from loris_bids_reader.mri.sidecar import BidsMriSidecarJsonFile
 from loris_utils.crypto import compute_file_blake2b_hash, compute_file_md5_hash
 
 import lib.exitcode
-from lib.bids import get_bids_json_session_info
 from lib.db.queries.dicom_archive import try_get_dicom_archive_series_with_series_uid_echo_time
 from lib.db.queries.mri_scan_type import try_get_mri_scan_type_with_id, try_get_mri_scan_type_with_name
 from lib.dcm2bids_imaging_pipeline_lib.base_pipeline import BasePipeline
@@ -20,6 +19,7 @@ from lib.imaging_lib.file_parameter import register_mri_file_parameter, register
 from lib.imaging_lib.nifti import add_nifti_spatial_file_parameters
 from lib.imaging_lib.nifti_pic import create_nifti_preview_picture
 from lib.import_bids_dataset.file_type import get_check_bids_imaging_file_type_from_extension
+from lib.import_bids_dataset.mri_sidecar import add_bids_mri_sidecar_file_parameters, get_bids_mri_sidecar_session_info
 from lib.logging import log_error_exit, log_verbose
 
 
@@ -84,7 +84,10 @@ class NiftiInsertionPipeline(BasePipeline):
         # ---------------------------------------------------------------------------------------------
         # Load the JSON file object with scan parameters if a JSON file was provided
         # ---------------------------------------------------------------------------------------------
-        self.json_file_dict = self.sidecar_json.data if self.sidecar_json is not None else dict()
+        self.json_file_dict = dict()
+        if self.sidecar_json is not None:
+            add_bids_mri_sidecar_file_parameters(self.env, self.sidecar_json, self.json_file_dict)
+
         add_nifti_spatial_file_parameters(self.nifti_path, self.json_file_dict)
 
         # ---------------------------------------------------------------------------------
@@ -217,7 +220,7 @@ class NiftiInsertionPipeline(BasePipeline):
                 self._validate_nifti_patient_name_with_dicom_patient_name()
                 session_info = get_dicom_archive_session_info(self.env, self.dicom_archive)
             else:
-                session_info = get_bids_json_session_info(self.env, self.json_file_dict)
+                session_info = get_bids_mri_sidecar_session_info(self.env, self.sidecar_json)
 
                 log_verbose(self.env, "Determined subject IDs based on the patient identifier stored in JSON file")
 

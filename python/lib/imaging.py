@@ -397,6 +397,7 @@ class Imaging:
         """
         return self.mri_scan_type_db_obj.get_scan_type_id_from_name(scan_type_name)
 
+    @deprecated('Use `lib.imaging_lib.file_parameter.get_bids_to_loris_parameter_types_dict` instead')
     def get_bids_to_minc_terms_mapping(self):
         """
         Returns the BIDS to MINC terms mapping queried from parameter_type table.
