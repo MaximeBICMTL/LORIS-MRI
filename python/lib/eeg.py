@@ -20,8 +20,9 @@ from lib.db.models.physio_file import DbPhysioFile
 from lib.db.models.session import DbSession
 from lib.db.queries.physio_file import try_get_physio_file_with_path
 from lib.env import Env
-from lib.import_bids_dataset.copy_files import copy_scans_tsv_file_to_loris_bids_dir
+from lib.import_bids_dataset.copy_files import copy_bids_file, copy_scans_tsv_file_to_loris_bids_dir
 from lib.import_bids_dataset.file_type import get_check_bids_imaging_file_type_from_extension
+from lib.import_bids_dataset.info import BidsImportInfo
 from lib.import_bids_dataset.physio import (
     get_check_bids_physio_file_hash,
     get_check_bids_physio_modality,
@@ -41,8 +42,7 @@ class Eeg:
     """
 
     def __init__(self, env: Env, bids_reader, bids_info: BidsDataTypeInfo, session: DbSession, db,
-                 data_dir, loris_bids_eeg_rel_dir,
-                 loris_bids_root_dir, dataset_tag_dict, dataset_type):
+                 info: BidsImportInfo, dataset_tag_dict, dataset_type):
         """
         Constructor method for the Eeg class.
 
@@ -52,12 +52,7 @@ class Eeg:
         :param session      : The LORIS session the EEG datasets are linked to
         :param db           : Database class object
          :type db           : object
-        :param data_dir     : LORIS data directory path (usually /data/PROJECT/data)
-         :type data_dir     : str
-        :param loris_bids_eeg_rel_dir: LORIS BIDS EEG relative dir path to data_dir
-         :type loris_bids_eeg_rel_dir: str
-        :param loris_bids_root_dir   : LORIS BIDS root directory path
-         :type loris_bids_root_dir   : str
+        :param info         : The BIDS import pipeline information
         :param dataset_tag_dict      : Dict of dataset-inherited HED tags
          :type dataset_tag_dict      : dict
         :param dataset_type          : raw | derivative. Type of the dataset
@@ -72,9 +67,9 @@ class Eeg:
 
         # load the LORIS BIDS import root directory where the eeg files will
         # be copied
-        self.loris_bids_eeg_rel_dir = loris_bids_eeg_rel_dir
         self.loris_bids_root_dir    = loris_bids_root_dir
         self.data_dir               = data_dir
+        self.info = info
 
         # load bids subject, visit and modality
         self.bids_info = bids_info
@@ -296,14 +291,9 @@ class Eeg:
             if sidecar_json is not None:
                 eeg_file_data = sidecar_json.data
 
-                sidecar_json_path = os.path.relpath(sidecar_json.path, self.data_dir)
-                if self.loris_bids_root_dir:
-                    # copy the JSON file to the LORIS BIDS import directory
-                    sidecar_json_path = self.copy_file_to_loris_bids_dir(
-                        sidecar_json.path, derivatives
-                    )
+                sidecar_json_path = copy_bids_file(self.info, self.session, self.bids_info.data_type, sidecar_json.path, derivatives)
+                eeg_file_data['eegjson_file'] = str(sidecar_json_path)
 
-                eeg_file_data['eegjson_file'] = sidecar_json_path
                 json_blake2 = compute_file_blake2b_hash(sidecar_json.path)
                 eeg_file_data['physiological_json_file_blake2b_hash'] = json_blake2
 
@@ -344,14 +334,9 @@ class Eeg:
             # eeg_file_data dictionary
             fdt_file_path = None
             if file_type.name == 'set' and fdt_file:
-                fdt_file_path = os.path.relpath(fdt_file, self.data_dir)
-                if self.loris_bids_root_dir:
-                    # copy the fdt file to the LORIS BIDS import directory
-                    fdt_file_path = self.copy_file_to_loris_bids_dir(
-                        fdt_file.path, derivatives
-                    )
-
+                fdt_file_path = copy_bids_file(self.info, self.session, self.bids_info.data_type, Path(fdt_file.path), derivatives)
                 eeg_file_data['fdt_file'] = fdt_file_path
+
                 fdt_blake2 = compute_file_blake2b_hash(fdt_file.path)
                 eeg_file_data['physiological_fdt_file_blake2b_hash'] = fdt_blake2
 
