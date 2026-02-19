@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 
 from loris_bids_reader.info import BidsDataTypeInfo, BidsSessionInfo, BidsSubjectInfo
 from loris_utils.crypto import compute_file_blake2b_hash
@@ -26,6 +27,7 @@ from lib.eeg import Eeg
 from lib.env import Env
 from lib.import_bids_dataset.check_sessions import check_or_create_bids_sessions
 from lib.import_bids_dataset.check_subjects import check_or_create_bids_subjects
+from lib.import_bids_dataset.env import BidsImportEnv
 from lib.make_env import make_env
 from lib.mri import Mri
 
@@ -298,6 +300,12 @@ def read_and_insert_bids(
             hed_union=hed_union
         )
 
+    import_env = BidsImportEnv(
+        data_dir_path    = Path(data_dir),
+        source_bids_path = Path(bids_dir),
+        loris_bids_path  = Path(loris_bids_root_dir) if loris_bids_root_dir is not None else None,
+    )
+
     # read list of modalities per session / candidate and register data
     for row in bids_reader.cand_session_modalities_list:
         bids_session = row['bids_ses_id']
@@ -318,13 +326,11 @@ def read_and_insert_bids(
             if modality == 'eeg' or modality == 'ieeg':
                 Eeg(
                     env,
+                    import_env,
                     bids_reader   = bids_reader,
                     session       = session,
                     bids_info     = BidsDataTypeInfo(row['bids_sub_id'], None, row['bids_ses_id'], modality),
                     db            = db,
-                    data_dir      = data_dir,
-                    loris_bids_eeg_rel_dir = loris_bids_modality_rel_dir,
-                    loris_bids_root_dir    = loris_bids_root_dir,
                     dataset_tag_dict       = dataset_tag_dict,
                     dataset_type           = type
                 )
