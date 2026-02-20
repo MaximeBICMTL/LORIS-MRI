@@ -1,4 +1,4 @@
-from datetime import datetime, time
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import ForeignKey
@@ -21,10 +21,10 @@ class DbPhysioTaskEvent(Base):
     channel        : Mapped[str | None]     = mapped_column('Channel')
     event_code     : Mapped[int | None]     = mapped_column('EventCode')
     event_value    : Mapped[str | None]     = mapped_column('EventValue')
-    event_sample   : Mapped[Decimal | None] = mapped_column('EventSample')
+    event_sample   : Mapped[int | None]     = mapped_column('EventSample')
     event_type     : Mapped[str | None]     = mapped_column('EventType')
     trial_type     : Mapped[str | None]     = mapped_column('TrialType')
-    response_time  : Mapped[time | None]    = mapped_column('ResponseTime')
+    response_time  : Mapped[Decimal | None] = mapped_column('ResponseTime')
 
     physio_file : Mapped['db_physio_file.DbPhysioFile']            = relationship('PhysiologicalFile')
     event_file  : Mapped['db_physio_event_file.DbPhysioEventFile'] = relationship('PhysiologicalEventFile', back_populates='task_events')
