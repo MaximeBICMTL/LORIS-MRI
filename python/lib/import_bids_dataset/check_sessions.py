@@ -43,7 +43,7 @@ def check_or_create_bids_session(
 
     candidate = check_or_create_bids_subject(env, session_info)
 
-    if session_info.session is None:
+    if session_info.session is not None:
         visit_label = session_info.session
     else:
         visit_label = get_default_bids_visit_label_config(env)
