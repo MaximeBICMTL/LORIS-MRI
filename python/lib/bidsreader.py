@@ -85,7 +85,8 @@ class BidsReader:
 
         # BIDSLayoutIndexer is required for PyBIDS >= 0.12.1
         # bids_pack_version = list(map(int, bids.__version__.split('.')))
-        # disabled until is a workaround for https://github.com/bids-standard/pybids/issues/760 is found
+        # disabled until is a workaround for https://github.com/bids-standard/pybids/issues/760 is
+        # found
         # [file] bids_import.py
         # [function] read_and_insert_bids
         # [line] for modality in row['modalities']: (row['modalities'] is empty)
