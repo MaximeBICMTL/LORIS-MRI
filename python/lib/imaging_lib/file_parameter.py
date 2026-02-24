@@ -6,7 +6,7 @@ from lib.db.models.file_parameter import DbFileParameter
 from lib.db.models.parameter_type import DbParameterType
 from lib.db.models.parameter_type_category_rel import DbParameterTypeCategoryRel
 from lib.db.queries.file_parameter import try_get_file_parameter_with_file_id_type_id
-from lib.db.queries.parameter_type import get_parameter_type_category_with_name, try_get_parameter_type_with_name
+from lib.db.queries.parameter_type import get_parameter_type_category_with_name, try_get_parameter_type_with_name_source
 from lib.env import Env
 
 
@@ -53,7 +53,7 @@ def get_or_create_parameter_type(env: Env, parameter_name: str) -> DbParameterTy
     Get a parameter type using its name, or create that parameter if it does not exist.
     """
 
-    parameter_type = try_get_parameter_type_with_name(env.db, parameter_name)
+    parameter_type = try_get_parameter_type_with_name_source(env.db, parameter_name, 'parameter_file')
     if parameter_type is not None:
         return parameter_type
 
