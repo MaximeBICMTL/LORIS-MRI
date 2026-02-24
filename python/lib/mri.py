@@ -12,12 +12,11 @@ from loris_utils.crypto import compute_file_blake2b_hash
 
 import lib.exitcode
 import lib.utilities as utilities
-from lib.candidate import Candidate
+from lib.db.models.session import DbSession
 from lib.env import Env
 from lib.imaging import Imaging
 from lib.import_bids_dataset.copy_files import copy_scans_tsv_file_to_loris_bids_dir
 from lib.import_bids_dataset.file_type import get_check_bids_imaging_file_type_from_extension
-from lib.session import Session
 
 
 class Mri:
@@ -74,7 +73,7 @@ class Mri:
         db.disconnect()
     """
 
-    def __init__(self, env: Env, bids_reader, bids_sub_id, bids_ses_id, bids_modality, db,
+    def __init__(self, env: Env, bids_reader, session: DbSession, bids_sub_id, bids_ses_id, bids_modality, db,
                  verbose, data_dir, default_visit_label,
                  loris_bids_mri_rel_dir, loris_bids_root_dir):
 
@@ -117,83 +116,22 @@ class Mri:
         self.verbose = verbose
 
         # find corresponding CandID and SessionID in LORIS
-        self.loris_cand_info = self.get_loris_cand_info()
+        self.session = session
         self.default_vl      = default_visit_label
-        self.psc_id          = self.loris_cand_info['PSCID']
-        self.cand_id         = self.loris_cand_info['CandID']
-        self.center_id       = self.loris_cand_info['RegistrationCenterID']
-        self.project_id      = self.loris_cand_info['RegistrationProjectID']
-        self.cohort_id       = None
-        if bids_reader.participants_info is not None:
-            row = bids_reader.participants_info.get_row(self.bids_sub_id)
-            if 'cohort' in row.data:
-                cohort_info = db.pselect(
-                    "SELECT CohortID FROM cohort WHERE title = %s",
-                    [row.data['cohort'], ]
-                )
-                if len(cohort_info) > 0:
-                    self.cohort_id = cohort_info[0]['CohortID']
-
-        self.session_id      = self.get_loris_session_id()
 
         # grep all the NIfTI files for the modality
         self.nifti_files = self.grep_nifti_files()
 
         # check if a tsv with acquisition dates or age is available for the subject
         self.scans_file = None
-        if self.bids_layout.get(suffix='scans', subject=self.psc_id, return_type='filename'):
-            scans_file_path = self.bids_layout.get(suffix='scans', subject=self.psc_id,
+        if self.bids_layout.get(suffix='scans', subject=self.session.candidate.psc_id, return_type='filename'):
+            scans_file_path = self.bids_layout.get(suffix='scans', subject=self.session.candidate.psc_id,
                                                    return_type='filename', extension='tsv')[0]
             self.scans_file = BidsScansTsvFile(Path(scans_file_path))
 
         # loop through NIfTI files and register them in the DB
         for nifti_file in self.nifti_files:
             self.register_raw_file(nifti_file)
-
-    def get_loris_cand_info(self):
-        """
-        Gets the LORIS Candidate info for the BIDS subject.
-
-        :return: Candidate info of the subject found in the database
-         :rtype: list
-        """
-
-        candidate       = Candidate(verbose=self.verbose, psc_id=self.bids_sub_id)
-        loris_cand_info = candidate.get_candidate_info_from_loris(self.db)
-
-        return loris_cand_info
-
-    def get_loris_session_id(self):
-        """
-        Greps the LORIS session.ID corresponding to the BIDS visit. Note,
-        if no BIDS visit are set, will use the default visit label value set
-        in the config module
-
-        :return: the session's ID in LORIS
-         :rtype: int
-        """
-
-        # check if there are any visit label in BIDS structure, if not,
-        # will use the default visit label set in the config module
-        visit_label = self.bids_ses_id if self.bids_ses_id else self.default_vl
-
-        session = Session(
-            self.db, self.verbose, self.cand_id, visit_label,
-            self.center_id, self.project_id, self.cohort_id
-        )
-        loris_vl_info = session.get_session_info_from_loris()
-
-        if not loris_vl_info:
-            message = "ERROR: visit label " + visit_label + "does not exist in " + \
-                      "the session table for candidate "  + self.cand_id         + \
-                      "\nPlease make sure the visit label is created in the "    + \
-                      "database or run bids_import.py with the -s option -s if " + \
-                      "you wish that the insertion pipeline creates the visit "  + \
-                      "label in the session table."
-            print(message)
-            exit(lib.exitcode.SELECT_FAILURE)
-
-        return loris_vl_info['ID']
 
     def grep_nifti_files(self):
         """
@@ -391,7 +329,7 @@ class Mri:
             file_info = {
                 'FileType'        : file_type.name,
                 'File'            : file_path,
-                'SessionID'       : self.session_id,
+                'SessionID'       : self.session.id,
                 'InsertedByUserID': getpass.getuser(),
                 'CoordinateSpace' : coordinate_space,
                 'OutputType'      : output_type,
@@ -406,7 +344,7 @@ class Mri:
             # create the pic associated with the file
             pic_rel_path = imaging.create_imaging_pic(
                 {
-                    'cand_id'      : self.cand_id,
+                    'cand_id'      : self.session.candidate.cand_id,
                     'data_dir_path': self.data_dir,
                     'file_rel_path': file_path,
                     'is_4D_dataset': is_4d_dataset,
