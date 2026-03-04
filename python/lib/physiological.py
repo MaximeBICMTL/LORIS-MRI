@@ -1,29 +1,26 @@
 """This class performs database queries for BIDS physiological dataset (EEG, MEG...)"""
 
-import sys
-import re
 import os
+import re
 import subprocess
+import sys
+from dataclasses import dataclass
 from functools import reduce
+from pathlib import Path
 
 import lib.exitcode
-from dataclasses import dataclass
-# Remove when we will drop the support for python 3.9
-from typing import Optional
-from lib.database_lib.parameter_type import ParameterType
-from lib.database_lib.physiological_file import PhysiologicalFile
-from lib.database_lib.physiological_event_file import PhysiologicalEventFile
-from lib.database_lib.physiological_task_event import PhysiologicalTaskEvent
-from lib.database_lib.physiological_task_event_opt import PhysiologicalTaskEventOpt
-from lib.database_lib.physiological_task_event_hed_rel import PhysiologicalTaskEventHEDRel
 from lib.database_lib.bids_event_mapping import BidsEventMapping
-from lib.database_lib.physiological_parameter_file import PhysiologicalParameterFile
+from lib.database_lib.config import Config
+from lib.database_lib.parameter_type import ParameterType
 from lib.database_lib.physiological_coord_system import PhysiologicalCoordSystem
+from lib.database_lib.physiological_event_file import PhysiologicalEventFile
+from lib.database_lib.physiological_file import PhysiologicalFile
+from lib.database_lib.physiological_parameter_file import PhysiologicalParameterFile
+from lib.database_lib.physiological_task_event import PhysiologicalTaskEvent
+from lib.database_lib.physiological_task_event_hed_rel import PhysiologicalTaskEventHEDRel
+from lib.database_lib.physiological_task_event_opt import PhysiologicalTaskEventOpt
 from lib.database_lib.point_3d import Point3DDB
 from lib.point_3d import Point3D
-from lib.database_lib.config import Config
-
-__license__ = "GPLv3"
 
 
 class Physiological:
@@ -523,10 +520,10 @@ class Physiological:
 
         # define modality (MEG, iEEG, EEG)
         try:
-            modality = [
+            modality = next(
                 k for k in electrode_metadata.keys()
                 if k.endswith('CoordinateSystem')
-            ][0].rstrip('CoordinateSystem')
+            ).rstrip('CoordinateSystem')
             modality_id = self.physiological_coord_system_db.grep_coord_system_modality_from_name(modality.lower())
             if modality_id is None:
                 print(f"Modality {modality} unknown in DB")
@@ -537,10 +534,10 @@ class Physiological:
 
         # type (Fiducials, AnatomicalLandmark, HeadCoil, DigitizedHeapPoints)
         try:
-            coord_system_type = [
+            coord_system_type = next(
                 k for k in electrode_metadata.keys()
                 if k.endswith('CoordinateSystem') and not k.startswith(modality)
-            ][0].rstrip('CoordinateSystem')
+            ).rstrip('CoordinateSystem')
             type_id = self.physiological_coord_system_db.grep_coord_system_type_from_name(coord_system_type)
             if type_id is None:
                 print(f"Type {coord_system_type} unknown in DB")
@@ -740,18 +737,10 @@ class Physiological:
 
     @dataclass
     class TagGroupMember:
-        """
-        Uncomment when we will drop the support for python 3.9
-
         hed_tag_id: int | None
         has_pairing: bool
         additional_members: int
         tag_value: str | None = None
-        """
-        hed_tag_id: Optional[int]
-        has_pairing: bool
-        additional_members: int
-        tag_value: Optional[str] = None
 
         def __eq__(self, other):
             return self.hed_tag_id == other.hed_tag_id and \
@@ -948,7 +937,7 @@ class Physiological:
             if len(tag_string) > 0:
                 hed_tag = next(filter(lambda tag: tag['Name'] == leaf_node, list(hed_union)), None)
                 if not hed_tag:
-                    print('ERROR: UNRECOGNIZED HED TAG: {}'.format(tag_string))
+                    print(f'ERROR: UNRECOGNIZED HED TAG: {tag_string}')
                     raise
                 hed_tag_id = hed_tag['ID']
         return hed_tag_id
@@ -1017,7 +1006,7 @@ class Physiological:
 
             # get values of present optional cols
             onset = 0
-            if isinstance(row['onset'], (int, float)):
+            if isinstance(row['onset'], int | float):
                 onset = row['onset']
             else:
                 # try casting to float, cannot be n/a
@@ -1025,7 +1014,7 @@ class Physiological:
                 onset = float(row['onset'])
 
             duration = 0
-            if isinstance(row['duration'], (int, float)):
+            if isinstance(row['duration'], int | float):
                 duration = row['duration']
             else:
                 try:
@@ -1039,13 +1028,13 @@ class Physiological:
             assert duration >= 0
 
             sample = None
-            if isinstance(row['event_sample'], (int, float)):
+            if isinstance(row['event_sample'], int | float):
                 sample = row['event_sample']
-            if row['sample'] and isinstance(row['sample'], (int, float)):
+            if row['sample'] and isinstance(row['sample'], int | float):
                 sample = row['sample']
 
             response_time = None
-            if isinstance(row['response_time'], (int, float)):
+            if isinstance(row['response_time'], int | float):
                 response_time = row['response_time']
 
             event_value = None
@@ -1132,8 +1121,8 @@ class Physiological:
         archive_fields = ()
         archive_values = ()
         for key, value in archive_info.items():
-            archive_fields = archive_fields + (key,)
-            archive_values = archive_values + (value,)
+            archive_fields = (*archive_fields, key)
+            archive_values = (*archive_values, value)
         self.db.insert(
             table_name   = 'physiological_archive',
             column_names = archive_fields,
@@ -1237,7 +1226,8 @@ class Physiological:
             if not chunk_root_dir:
                 # the bids_rel_dir is the first two directories in file_path (
                 # bids_imports/BIDS_dataset_name_BIDSVersion)
-                bids_rel_dir   = file_path.split('/')[0] + '/' + file_path.split('/')[1]
+                file_path_components = Path(file_path).parts
+                bids_rel_dir   = os.path.join(file_path_components[0], file_path_components[1])
                 chunk_root_dir = os.path.join(data_dir, f'{bids_rel_dir}_chunks')
 
             full_file_path = os.path.join(data_dir, file_path)
@@ -1245,10 +1235,10 @@ class Physiological:
             # determine which script to run based on the file type
             file_type = self.grep_file_type_from_file_id(physio_file_id)
             if file_type == 'set':
-                script = os.environ['LORIS_MRI'] + '/python/react-series-data-viewer/eeglab_to_chunks.py'
+                script = os.environ['LORIS_MRI'] + '/python/loris_eeg_chunker/eeglab_to_chunks.py'
                 command = 'python ' + script + ' ' + full_file_path + ' --destination ' + chunk_root_dir
             elif file_type == 'edf':
-                script = os.environ['LORIS_MRI'] + '/python/react-series-data-viewer/edf_to_chunks.py'
+                script = os.environ['LORIS_MRI'] + '/python/loris_eeg_chunker/edf_to_chunks.py'
                 command = 'python ' + script + ' ' + full_file_path + ' --destination ' + chunk_root_dir
 
             # chunk the electrophysiology dataset if a command was determined above
@@ -1265,10 +1255,11 @@ class Physiological:
                 print('ERROR: ' + script + ' not found')
                 sys.exit(lib.exitcode.CHUNK_CREATION_FAILURE)
 
-            chunk_path = chunk_root_dir + os.path.splitext(os.path.basename(file_path))[0] + '.chunks'
+            chunk_path = os.path.join(chunk_root_dir, os.path.splitext(os.path.basename(file_path))[0] + '.chunks')
             if os.path.isdir(chunk_path):
                 self.insert_physio_parameter_file(
                     physiological_file_id = physio_file_id,
                     parameter_name = 'electrophysiology_chunked_dataset_path',
-                    value = chunk_path.replace(chunk_root_dir_config, '') if chunk_root_dir_config else chunk_path.replace(data_dir, '')
+                    value = os.path.relpath(chunk_path, chunk_root_dir_config) if chunk_root_dir_config
+                        else os.path.relpath(chunk_path, data_dir)
                 )
