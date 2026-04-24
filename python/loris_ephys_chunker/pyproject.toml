@@ -11,6 +11,7 @@ dependencies = [
     "mne-bids>=0.14",
     "numpy",
     "protobuf>=3.0.0",
+    "pydantic",
     "scipy",
 ]
 

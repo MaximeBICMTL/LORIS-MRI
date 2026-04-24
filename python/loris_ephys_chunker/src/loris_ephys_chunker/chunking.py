@@ -10,6 +10,14 @@ import numpy.typing as npt
 from mne.io import BaseRaw
 from scipy import signal
 
+from loris_ephys_chunker.metadata import ChannelMetadata
+from loris_ephys_chunker.mne import (
+    MneChannel,
+    get_channel_coil_type,
+    get_channel_display_unit_factor,
+    get_channel_type,
+    get_channel_unit,
+)
 from loris_ephys_chunker.protocol_buffers import chunk_pb2 as chunk_pb
 
 ChannelArray = npt.NDArray[np.float64]
@@ -81,7 +89,7 @@ def write_index_json(
     chunk_dir: Path,
     time_interval: tuple[np.float64, np.float64],
     series_range: tuple[float, float],
-    channel_metadata: list[dict[str, Any]],
+    channel_metadata: list[ChannelMetadata],
     chunk_size: int,
     downsamplings: list[int],
     valid_samples_in_last_chunk: list[int],
@@ -100,12 +108,12 @@ def write_index_json(
             if downsamplings != data['downsamplings']:
                 sys.exit("Downsamplings does not match the one found in index.json.")
 
-            indices = [channelMetadata['index'] for channelMetadata in channel_metadata]
+            indices = [channel.index for channel in channel_metadata]
             channel_metadata.extend(
-                channelMetadata for channelMetadata in data['channelMetadata']
-                if channelMetadata['index'] not in indices
+                ChannelMetadata(**channel) for channel in data['channelMetadata']
+                if channel['index'] not in indices
             )
-            channel_metadata = sorted(channel_metadata, key=lambda k: k['index'])
+            channel_metadata = sorted(channel_metadata, key=lambda channel: channel.index)
             if data['seriesRange'][0] < series_range[0]:
                 series_range = (data['seriesRange'][0], series_range[1])
 
@@ -114,6 +122,8 @@ def write_index_json(
     except Exception as e:
         print(e)
         print('Unable to read an existing index.json file. A new one will be created.')
+
+    channel_metadata = list(map(lambda channel: channel.model_dump(), channel_metadata))
 
     json_dict = OrderedDict([
         ('timeInterval', list(time_interval)),
@@ -156,59 +166,91 @@ def write_chunks(chunk_dir: Path, channel_chunks_list: list[ChannelArray], chann
                         chunk_file.write(encoded_chunk)
 
 
+def get_channel_metadata(channel: MneChannel, index: int, channel_data: ChannelArray) -> ChannelMetadata:
+    type = get_channel_type(channel)
+    coil_type = get_channel_coil_type(channel)
+    unit = get_channel_unit(channel)
+
+    if type is not None and unit is not None:
+        display_unit, display_factor = get_channel_display_unit_factor(type, unit)
+    else:
+        display_unit = None
+        display_factor = None
+
+    return ChannelMetadata(
+        name=channel["ch_name"],
+        index=index,
+        signal_range=(float(np.amin(channel_data)), float(np.amax(channel_data))),
+        type=type,
+        coil_type=coil_type,
+        unit=unit,
+        display_unit=display_unit,
+        display_factor=display_factor,
+    )
+
+
 def mne_file_to_chunks(
     path: Path,
     raw: BaseRaw,
     chunk_size: int,
+    from_channel_index: int,
     from_channel_name: str | None,
     channel_count: int | None,
 ) -> tuple[
     list[ChannelArray],
     tuple[np.float64, np.float64],
     tuple[float, float],
-    list[str],
-    list[tuple[float, float]],
+    list[ChannelMetadata],
     list[int],
 ]:
     time_interval: tuple[np.float64, np.float64] = (raw.times[0], raw.times[-1])
     channel_names = cast(list[str], raw.info["ch_names"])
-    channel_ranges: list[tuple[float, float]] = []
-    signal_range = (np.inf, -np.inf)
+    channels: list[ChannelMetadata] = []
     channel_chunks_list = []
-    selected_channels = []
     valid_samples_in_last_chunk = []
 
     if from_channel_name:
         from_channel_index = channel_names.index(from_channel_name)
-        if channel_count and from_channel_index + channel_count < len(channel_names):
-            selected_channels = channel_names[from_channel_index:from_channel_index + channel_count]
-        else:
-            selected_channels = channel_names[from_channel_index:]
 
-    for i, channel_name in enumerate(selected_channels, start=1):
-        print(f"Processing channel {channel_name} ({i} / {len(selected_channels)})")
-        channel = cast(ChannelArray, raw.get_data(channel_name))  # type: ignore
-        channel_min = np.amin(channel)
-        channel_max = np.amax(channel)
-        channel_ranges.append((channel_min, channel_max))
-        signal_range = (min(channel_min, signal_range[0]), max(channel_max, signal_range[1]))
+    to_channel_index = (
+        min(from_channel_index + channel_count, len(channel_names))
+        if channel_count else len(channel_names)
+    )
 
-        channel = np.expand_dims(channel, axis=-2)
-        downsampled_values_lists = create_downsampled_values_lists(channel, chunk_size)
+    for i, channel_index in enumerate(range(from_channel_index, to_channel_index)):
+        channel = cast(Any, raw.info["chs"][channel_index])
+        channel_name: str = channel['ch_name']
+
+        print(f"Processing channel {channel_name} ({i + 1} / {to_channel_index - from_channel_index})")
+
+        channel_data = cast(ChannelArray, raw.get_data(channel_name))  # type: ignore
+
+        print(channel)
+
+        channels.append(get_channel_metadata(channel, channel_index, channel_data))
+
+        print(channels[-1])
+
+        channel_data = np.expand_dims(channel_data, axis=-2)
+        downsampled_values_lists = create_downsampled_values_lists(channel_data, chunk_size)
         chunks = create_chunks_from_values_lists(downsampled_values_lists, chunk_size)
 
         if not channel_chunks_list:
             channel_chunks_list = chunks
-            # Assuming all channels have the same recording length as first channel
             valid_samples_in_last_chunk = [
-                num_values % chunk_size or chunk_size   # chunk size if 0
+                num_values % chunk_size or chunk_size
                 for num_values in map(lambda values: len(values[0][0]), downsampled_values_lists)
             ]
         else:
             for j, chunk in enumerate(chunks):
                 channel_chunks_list[j] = np.append(channel_chunks_list[j], chunk, axis=0)
 
-    return channel_chunks_list, time_interval, signal_range, channel_names, channel_ranges, valid_samples_in_last_chunk
+    signal_range = (
+        min(channel.signal_range[0] for channel in channels),
+        max(channel.signal_range[1] for channel in channels),
+    )
+
+    return channel_chunks_list, time_interval, signal_range, channels, valid_samples_in_last_chunk
 
 
 def write_chunk_directory(
@@ -224,20 +266,11 @@ def write_chunk_directory(
 ):
     chunk_dir = chunk_dir_path(path, prefix=prefix, destination=destination)
     channel_chunks_list, time_interval, signal_range, \
-        channel_names, channel_ranges, valid_samples_in_last_chunk = \
-        mne_file_to_chunks(path, raw, chunk_size, from_channel_name, channel_count)
+        channel_metadata, valid_samples_in_last_chunk = \
+        mne_file_to_chunks(path, raw, chunk_size, from_channel_index, from_channel_name, channel_count)
 
     if downsamplings is not None:
         channel_chunks_list = channel_chunks_list[:downsamplings]
-
-    channel_metadata = [
-        {
-            'name': channel_names[i],
-            'seriesRange': channel_ranges[i],
-            'index': from_channel_index + i
-        }
-        for i in range(len(channel_ranges))
-    ]
 
     write_index_json(
         chunk_dir,
