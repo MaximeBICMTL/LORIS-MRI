@@ -1,7 +1,8 @@
-use strict;
-use warnings;
-use XML::Simple;
+#use strict;
+#use warnings;
 
+use XML::Simple;
+$XML::Simple::PREFERRED_PARSER = 'XML::Parser';
 =pod
 # -----------------------------------------------------------------------------------------------
   WHAT THIS IS:
@@ -37,6 +38,7 @@ my $db_name     = $config->{database}->{database};
 
 @db = ($db_name, $db_user, $db_pass, $db_host);
 
+
 =pod
 # SECTION II
 # -----------------------------------------------------------------------------------------------
@@ -50,7 +52,7 @@ my $db_name     = $config->{database}->{database};
 # assumes identifers are stored as <PSCID>_<DCCID>_<visit> in PatientName field, where <visit> is 3 digits.
 sub getSubjectIDs {
     my ($patientName, $patientID, $scannerID, $dbhr, $db) = @_;
-
+    print "In getSubjectIDs patient name is $patientName\n";
     my %subjectID; # Will stored subject IDs.
     
      # If patientName is phantom scan or test scan
@@ -74,8 +76,8 @@ sub getSubjectIDs {
 
         # MATCH 2: Center
         my $centerAlias = $2;
-        my $query = "SELECT CenterID FROM psc WHERE Alias = ?";
-        my $sth = $${dbhr}->prepare($query);
+        $query = "SELECT CenterID FROM psc WHERE Alias = ?";
+        $sth = $${dbhr}->prepare($query);
         $sth->execute($centerAlias);
 
         if ($sth->rows > 0) {
@@ -93,8 +95,8 @@ sub getSubjectIDs {
 
         # PRESET: Cohort
         my $subprojectTitle = "Control";
-        my $query = "SELECT CohortID FROM cohort WHERE title = ?";
-        my $sth = $${dbhr}->prepare($query);
+        $query = "SELECT CohortID FROM cohort WHERE title = ?";
+        $sth = $${dbhr}->prepare($query);
         $sth->execute($subprojectTitle);
 
         if ($sth->rows > 0) {
@@ -128,15 +130,14 @@ sub getSubjectIDs {
         $subjectID{'visitLabel'} = NeuroDB::MRI::my_trim($3);
         $subjectID{'isPhantom'}  = 0;
         
+	# SET TO 1 WHEN INGESTING DEMS DATA
         $subjectID{'createVisitLabel'} = 0;
-
+	my $subprojectTitle = "Disease";
         if ($1 =~ /^([A-Za-z]{3,4})\d{7}$/) {
-            my $pscidPrefix = $1;
-
-            my $query = "SELECT ImagingCreateVisitLabel FROM Project WHERE Alias= ?";
+            my $query = "SELECT ImagingCreateVisitLabel FROM Project p JOIN candidate c ON c.RegistrationProjectID =p.ProjectID WHERE CandID= ?";
 
             my $sth = $${dbhr}->prepare($query);
-            $sth->execute($pscidPrefix);
+            $sth->execute($subjectID{'CandID'});
             my $rows = $sth->rows;
 
             if ($rows > 0) {
@@ -156,7 +157,7 @@ sub getSubjectIDs {
                     }
 
                     # when createVisitLabel is set to 1 there is a chance the visit label does not exist 
-                    # so fetch the center from the candidate instead and pass it to the MRI code
+                    # so fetch the center and project from the candidate instead and pass it to the MRI code
                     if ($val == 1) {
                         my $querysub = "SELECT RegistrationProjectID, RegistrationCenterID FROM candidate WHERE CandID = ?";
                         my $sthsub = $${dbhr}->prepare($querysub);
@@ -167,15 +168,14 @@ sub getSubjectIDs {
                             $subjectID{'ProjectID'} = $rowsub->{'RegistrationProjectID'};
                             $subjectID{'CenterID'} = $rowsub->{'RegistrationCenterID'};
                         }
-
                     }
+                } else {
+                    print STDERR "WARNING: ImagingCreateVisitLabel key not found in row\n";
+                }
             } else {
-                print STDERR "WARNING: ImagingCreateVisitLabel key not found in row\n";
+                print STDERR "WARNING: Subject CandID not found\n";
             }
-        } else {
-            print STDERR "WARNING: No rows returned from Project table for Alias = '$subprojectTitle'\n";
         }
-    }
 
 
         # When createVisitLabel is set to 1, SubprojectID must also

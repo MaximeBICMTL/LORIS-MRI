@@ -378,6 +378,7 @@ sub setFileData {
     my $this = shift;
     my ($paramName, $value) = @_;
     
+    $value =~ s/^\s+|\s+$//g;
     $this->{'fileData'}->{$paramName} = $value;
 
     if($this->getFileDatum('FileID')) {

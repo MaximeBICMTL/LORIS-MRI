@@ -64,7 +64,7 @@ sub connect_to_db
     $db_user = ""    unless $db_user;       # user name (fill in as appropriate)
     $db_pass = ""    unless $db_pass;       # password (ditto)
 
-    my $dbh = DBI->connect($db_dsn, $db_user, $db_pass) or die
+    my $dbh = DBI->connect($db_dsn, $db_user, $db_pass, { PrintError => 0, RaiseError => 1, AutoCommit => 1 }) or die
         "DB connection failed\nDBI Error: ". $DBI::errstr."\n";
       
     $dbh->{mysql_auto_reconnect} = 1;
