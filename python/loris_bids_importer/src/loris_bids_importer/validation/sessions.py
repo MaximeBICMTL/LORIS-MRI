@@ -96,17 +96,9 @@ def create_bids_session(
     session = DbSession(
         candidate_id     = candidate.id,
         visit_label      = visit_label,
-        current_stage    = 'Not Started',
         site_id          = candidate.registration_site_id,
         project_id       = candidate.registration_project_id,
         cohort_id        = cohort.id,
-        submitted        = False,
-        active           = True,
-        user_id          = '',
-        hardcopy_request = '-',
-        mri_qc_status    = '',
-        mri_qc_pending   = False,
-        mri_caveat       = True,
     )
 
     env.db.add(session)
