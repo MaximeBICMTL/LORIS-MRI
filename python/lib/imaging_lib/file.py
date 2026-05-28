@@ -9,6 +9,7 @@ from lib.db.models.mri_scan_type import DbMriScanType
 from lib.db.models.mri_scanner import DbMriScanner
 from lib.db.models.session import DbSession
 from lib.env import Env
+from lib.imaging_lib.file_parameter import try_get_mri_file_parameter
 
 
 def register_mri_file(
@@ -57,3 +58,35 @@ def register_mri_file(
     env.db.flush()
 
     return file
+
+
+def get_mri_file_associated_files(env: Env, file: DbFile) -> list[Path]:
+    """
+    Get the paths of the associated files of an MRI file from the file parameters table.
+
+    Paths are relative to the LORIS data directory and include:
+    - BIDS sidecar JSON file
+    - BVAL and BVEC files
+    - Preview picture file
+    """
+
+    # Get the associated file paths from the file parameters table.
+    file_parameters = [
+        try_get_mri_file_parameter(env, file, 'bids_json_file'),
+        try_get_mri_file_parameter(env, file, 'check_bval_filename'),
+        try_get_mri_file_parameter(env, file, 'check_bvec_filename'),
+    ]
+
+    # Filter the files that are actually registered.
+    file_paths = [
+        Path(parameter_file)
+        for parameter_file in file_parameters
+        if parameter_file is not None
+    ]
+
+    # The preview picture file parameter is relative to the 'pic' directory, treat it separately.
+    preview_picture_parameter = try_get_mri_file_parameter(env, file, 'check_pic_filename')
+    if preview_picture_parameter is not None:
+        file_paths.append(Path('pic') / preview_picture_parameter)
+
+    return file_paths

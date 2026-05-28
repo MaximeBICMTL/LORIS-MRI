@@ -4,7 +4,7 @@ from typing import Any
 from lib.db.models.file import DbFile
 from lib.db.models.file_parameter import DbFileParameter
 from lib.db.queries.file_parameter import try_get_file_parameter_with_file_id_type_id
-from lib.db.queries.parameter_type import get_all_parameter_types
+from lib.db.queries.parameter_type import get_all_parameter_types, try_get_parameter_type_with_name_source
 from lib.env import Env
 from lib.imaging_lib.parameter import get_or_create_parameter_type
 
@@ -77,3 +77,20 @@ def map_bids_to_loris_file_parameters(env: Env, file_parameters: dict[str, Any])
         file_parameter_type = parameter_types_dict.get(file_parameter)
         if file_parameter_type is not None:
             file_parameters[file_parameter_type] = file_parameters[file_parameter]
+
+
+def try_get_mri_file_parameter(env: Env, file: DbFile, parameter_name: str) -> str | None:
+    """
+    Get a file parameter of an MRI file, or return `None` if that parameter does not exist or has
+    no value.
+    """
+
+    parameter_type = try_get_parameter_type_with_name_source(env.db, parameter_name, 'MRI Variables')
+    if parameter_type is None:
+        return None
+
+    parameter = try_get_file_parameter_with_file_id_type_id(env.db, file.id, parameter_type.id)
+    if parameter is None:
+        return None
+
+    return parameter.value

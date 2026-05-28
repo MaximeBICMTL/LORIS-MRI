@@ -436,6 +436,7 @@ class Imaging:
             project_id, cohort_id, center_id, visit_label, scanner_id
         )
 
+    @deprecated('Use `lib.imaging_lib.file.get_mri_file_associated_files` instead.')
     def get_bids_files_info_from_parameter_file_for_file_id(self, file_id):
         """
         Fetch other BIDS files associated to the NIfTI file present in the files table.
@@ -450,6 +451,7 @@ class Imaging:
             self.grep_parameter_value_from_file_id_and_parameter_name(file_id, "check_bvec_filename")
         ]
 
+    @deprecated('Use `lib.imaging_lib.file_parameter.get_mri_file_parameter` instead.')
     def grep_parameter_value_from_file_id_and_parameter_name(self, file_id, param_type_name):
         """
         Grep a Value in parameter_file based on a FileID and parameter type Name.

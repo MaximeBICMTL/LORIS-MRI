@@ -11,8 +11,8 @@ import lib.exitcode
 from lib.config import get_data_dir_path_config
 from lib.config_file import load_config
 from lib.db.queries.file import try_get_file_with_id
-from lib.db.queries.file_parameter import try_get_parameter_value_with_file_id_parameter_name
 from lib.env import Env
+from lib.imaging_lib.file_parameter import try_get_mri_file_parameter
 from lib.imaging_lib.nifti_pic import create_nifti_preview_picture
 from lib.logging import log, log_error, log_error_exit, log_warning
 from lib.make_env import make_env
@@ -92,10 +92,7 @@ def make_pic(env: Env, data_dir_path: Path, file_id: int, force: bool):
         return
 
     # Check if there is already a preview picture for the NIfTI file.
-    current_pic = try_get_parameter_value_with_file_id_parameter_name(
-        env.db, file_id, 'check_pic_filename'
-    )
-
+    current_pic = try_get_mri_file_parameter(env, nifti_file, 'check_pic_filename')
     if current_pic is not None and not force:
         log_warning(
             env,

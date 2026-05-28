@@ -6,7 +6,9 @@ from loris_utils.fs import remove_empty_directories
 from sqlalchemy import inspect
 
 import lib.exitcode
+from lib.db.queries.file import try_get_file_with_id
 from lib.dcm2bids_imaging_pipeline_lib.base_pipeline import BasePipeline
+from lib.imaging_lib.file import get_mri_file_associated_files
 from lib.logging import log_error_exit
 
 
@@ -117,29 +119,19 @@ class PushImagingFilesToS3Pipeline(BasePipeline):
 
         file_ids = [v["id_field_value"] for v in self.files_to_push_list] if self.files_to_push_list else []
 
-        files_info = []
         for file_id in file_ids:
-            files_info.extend(self.imaging_obj.get_bids_files_info_from_parameter_file_for_file_id(file_id))
-            pic_entry_dict = self.imaging_obj.grep_parameter_value_from_file_id_and_parameter_name(
-                file_id, "check_pic_filename"
-            )
-            if pic_entry_dict:
-                # for the pic, we need to add the pic/ subdir to the Value
-                # otherwise, it will not be found on the filesystem
-                pic_entry_dict["Value"] = "pic/" + pic_entry_dict["Value"]
-
-            files_info.extend([pic_entry_dict])
-
-        for file_entry in files_info:
-            if not file_entry:
+            file = try_get_file_with_id(self.env.db, file_id)
+            if file is None:
                 continue
-            self.files_to_push_list.append({
-                "table_name": "parameter_file",
-                "id_field_name": "ParameterFileID",
-                "id_field_value": file_entry["ParameterFileID"],
-                "file_path_field_name": "Value",
-                "original_file_path_field_value": file_entry["Value"]
-            })
+
+            for file_path in get_mri_file_associated_files(self.env, file):
+                self.files_to_push_list.append({
+                    "table_name": "parameter_file",
+                    "id_field_name": "ParameterFileID",
+                    "id_field_value": file.id,
+                    "file_path_field_name": "Value",
+                    "original_file_path_field_value": str(file_path)
+                })
 
     def _get_list_of_files_from_mri_protocol_violated_scans(self):
         """
