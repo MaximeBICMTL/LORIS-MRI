@@ -46,6 +46,10 @@ class DbSession(Base):
     bvl_qc_type              : Mapped[str | None]      = mapped_column('BVLQCType')
     bvl_qc_exclusion         : Mapped[str | None]      = mapped_column('BVLQCExclusion')
     qcd                      : Mapped[str | None]      = mapped_column('QCd')
+    # C-BIG OVERRIDE START
+    # Remove when updating to LORIS 29
+    scan_done                : Mapped[bool | None]     = mapped_column('Scan_done', YNBool)
+    # C-BIG OVERRIDE END
     mri_qc_status            : Mapped[str]             = mapped_column('MRIQCStatus', default='')
     mri_qc_pending           : Mapped[bool]            = mapped_column('MRIQCPending', YNBool, default=False)
     mri_qc_first_change_time : Mapped[datetime | None] = mapped_column('MRIQCFirstChangeTime')
