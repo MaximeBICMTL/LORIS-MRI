@@ -11,4 +11,9 @@ class DbProject(Base):
     name                  : Mapped[str]         = mapped_column('Name')
     alias                 : Mapped[str]         = mapped_column('Alias')
     recruitement_target   : Mapped[int | None]  = mapped_column('recruitmentTarget')
-    show_summary_on_login : Mapped[bool | None] = mapped_column('showSummaryOnLogin', IntBool, default=True)
+    # C-BIG OVERRIDE START
+    # C-BIG specific fields
+    guid_required              : Mapped[bool | None] = mapped_column('GUIDRequired', IntBool, default=False)
+    pii_storage                : Mapped[str | None]  = mapped_column('PIIStorage')
+    imaging_create_visit_label : Mapped[bool | None] = mapped_column('ImagingCreateVisitLabel', IntBool, default=False)
+    # C-BIG OVERRIDE END

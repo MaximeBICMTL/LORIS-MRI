@@ -40,6 +40,10 @@ class DbCandidate(Base):
     entity_type             : Mapped[str]         = mapped_column('Entity_type', default='Human')
     proband_sex             : Mapped[str | None]  = mapped_column('ProbandSex')
     proband_sate_of_birth   : Mapped[date | None] = mapped_column('ProbandDoB')
+    # C-BIG OVERRIDE START
+    # C-BIG specific fields
+    guid: Mapped[str | None] = mapped_column('GUID')
+    # C-BIG OVERRIDE END
 
     sessions             : Mapped[list['db_session.DbSession']] \
         = relationship('DbSession', back_populates='candidate')
