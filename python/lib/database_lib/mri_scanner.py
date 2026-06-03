@@ -118,20 +118,23 @@ class MriScanner:
             'imaging.py', 'Scanner', project_id, datetime.datetime.now()
         )
 
-        candidate_id = self.db.insert(
+        self.db.insert(
             table_name='candidate',
             column_names=column_names,
             values=values,
             get_last_id=True,
         )
 
+        # C-BIG OVERRIDE START
+        # Remove when updating to LORIS 27
         # create the new scanner ID
         scanner_id = self.db.insert(
             table_name='mri_scanner',
-            column_names=('Manufacturer', 'Model', 'Serial_number', 'Software', 'CandidateID'),
-            values=(manufacturer, scanner_model, serial_number, software_version, candidate_id),
+            column_names=('Manufacturer', 'Model', 'Serial_number', 'Software', 'CandID'),
+            values=(manufacturer, scanner_model, serial_number, software_version, new_cand_id),
             get_last_id=True
         )
+        # C-BIG OVERRIDE END
 
         return scanner_id
 
@@ -146,11 +149,14 @@ class MriScanner:
         :return: scanner CandID
          :rtype: int
         """
+        # C-BIG OVERRIDE START
+        # Remove when updating to LORIS 27
         query = '''
         SELECT CandID
         FROM mri_scanner
-            JOIN candidate ON (candidate.ID=mri_scanner.CandidateID)
+            JOIN candidate ON (candidate.CandID=mri_scanner.CandID)
         WHERE ID = %s
         '''
+        # C-BIG OVERRIDE END
         results = self.db.pselect(query=query, args=(scanner_id,))
         return results[0]['CandID'] if results else None

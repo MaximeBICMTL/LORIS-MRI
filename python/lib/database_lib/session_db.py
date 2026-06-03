@@ -50,10 +50,13 @@ class SessionDB:
          :rtype: dict
         """
 
+        # C-BIG OVERRIDE START
+        # Remove when updating to LORIS 27
         query = "SELECT * FROM session" \
                 " JOIN psc USING (CenterID)" \
-                " JOIN candidate ON (candidate.ID=session.CandidateID)" \
+                " JOIN candidate ON (candidate.CandID=session.CandID)" \
                 " WHERE CandID=%s AND LOWER(Visit_label)=LOWER(%s) AND Active='Y'"
+        # C-BIG OVERRIDE END
         results = self.db.pselect(query=query, args=(cand_id, visit_label))
 
         return results[0] if results else None
@@ -72,10 +75,13 @@ class SessionDB:
          :rtype: dict
         """
 
+        # C-BIG OVERRIDE START
+        # Remove when updating to LORIS 27
         query = "SELECT * FROM session" \
                 " JOIN psc USING (CenterID)" \
-                " JOIN candidate ON (candidate.ID = session.CandidateID)" \
+                " JOIN candidate ON (candidate.CandID = session.CandID)" \
                 " WHERE PSCID=%s AND Visit_label=%s"
+        # C-BIG OVERRIDE END
         results = self.db.pselect(query=query, args=(pscid, visit_label))
 
         return results[0] if results else None

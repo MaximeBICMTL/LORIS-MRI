@@ -16,7 +16,10 @@ class DbSession(Base):
     __tablename__ = 'session'
 
     id                       : Mapped[int]             = mapped_column('ID', primary_key=True)
-    candidate_id             : Mapped[int]             = mapped_column('CandidateID', ForeignKey('candidate.ID'))
+    # C-BIG OVERRIDE START
+    # Remove when updating to LORIS 27
+    cand_id                  : Mapped[int]             = mapped_column('CandID', ForeignKey('candidate.CandID'))
+    # C-BIG OVERRIDE END
     site_id                  : Mapped[int]             = mapped_column('CenterID', ForeignKey('psc.CenterID'))
     project_id               : Mapped[int]             = mapped_column('ProjectID', ForeignKey('Project.ProjectID'))
     visit_number             : Mapped[int | None]      = mapped_column('VisitNo')

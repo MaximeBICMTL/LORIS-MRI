@@ -65,7 +65,10 @@ def get_or_create_scanner(
         model            = scanner_info.model,
         serial_number    = scanner_info.serial_number,
         software_version = scanner_info.software_version,
-        candidate_id     = candidate.id,
+        # C-BIG OVERRIDE START
+        # Remove when updating to LORIS 27
+        cand_id          = candidate.cand_id,
+        # C-BIG OVERRIDE END
     )
 
     env.db.add(mri_scanner)

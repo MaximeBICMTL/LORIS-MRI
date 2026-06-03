@@ -144,23 +144,26 @@ class Files:
 
     def select_distinct_acquisition_protocol_id_per_tarchive_source(self, tarchive_id):
         """
-        Get a list of distinct scan types (a.k.a. `MriScanTypeID`) inserted into the `files`
+        Get a list of distinct scan types (a.k.a. `AcquisitionProtocolID`) inserted into the `files`
         table for a given DICOM archive (a.k.a. `TarchiveSource`).
 
         :param tarchive_id: `TarchiveID` to use as the `TarchiveSource` to restrict the SELECT
                              statement on
          :type tarchive_id: int
 
-        :return: list of scan types found (`MriScanTypeID`)
+        :return: list of scan types found (`AcquisitionProtocolID`)
          :rtype: list
         """
 
-        query = "SELECT DISTINCT MriScanTypeID FROM files WHERE TarchiveSource = %s"
+        # C-BIG OVERRIDE START
+        # Remove when updating to LORIS 27
+        query = "SELECT DISTINCT AcquisitionProtocolID FROM files WHERE TarchiveSource = %s"
 
         results = self.db.pselect(query=query, args=(tarchive_id,))
-        acquisition_protocol_id_list = [v["MriScanTypeID"] for v in results]
+        acquisition_protocol_id_list = [v["AcquisitionProtocolID"] for v in results]
 
         return acquisition_protocol_id_list
+        # C-BIG OVERRIDE END
 
     def get_file_ids_and_series_number_per_scan_type_and_tarchive_id(self, tarchive_id, scan_type_id):
         """
@@ -172,15 +175,19 @@ class Files:
         :param scan_type_id: ID of the scan type to restrict the query on
          :type scan_type_id: int
 
-        :return: list of `FileID` and `SeriesNumber` for a given `TarchiveID` and `MriScanTypeID`
+        :return: list of `FileID` and `SeriesNumber` for a given `TarchiveID` and
+                 `AcquisitionProtocolID`
          :rtype: list
         """
 
+        # C-BIG OVERRIDE START
+        # Remove when updating to LORIS 27
         query = "SELECT FileID, Value AS SeriesNumber " \
                 "FROM files " \
                 "  JOIN parameter_file USING(FileID) " \
                 "  JOIN parameter_type USING(ParameterTypeID) " \
-                "WHERE TarchiveSource = %s AND MriScanTypeID = %s AND Name = %s"
+                "WHERE TarchiveSource = %s AND AcquisitionProtocolID = %s AND Name = %s"
+        # C-BIG OVERRIDE END
 
         return self.db.pselect(query=query, args=(tarchive_id, scan_type_id, "series_number"))
 

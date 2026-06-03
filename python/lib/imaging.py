@@ -11,7 +11,6 @@ from loris_utils.crypto import compute_file_blake2b_hash
 from nilearn import image, plotting
 from typing_extensions import deprecated
 
-from lib.database_lib.candidate_db import CandidateDB
 from lib.database_lib.config import Config
 from lib.database_lib.files import Files
 from lib.database_lib.mri_candidate_errors import MriCandidateErrors
@@ -270,11 +269,11 @@ class Imaging:
                     and row['EchoNumber'] == echo_number:
                 return
 
-        candidate_obj = CandidateDB(self.db, self.verbose)
-        candidate_id = candidate_obj.get_candidate_id(cand_id)
-
         info_to_insert_dict = {
-            "CandidateID": candidate_id,
+            # C-BIG OVERRIDE START
+            # Remove when updating to LORIS 27
+            "CandID": cand_id,
+            # C-BIG OVERRIDE END
             "PSCID": psc_id,
             "TarchiveID": tarchive_id,
             "time_run": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -314,7 +313,10 @@ class Imaging:
         echo_number = repr(info_to_insert_dict["EchoNumber"])
         phase_encoding_dir = info_to_insert_dict["PhaseEncodingDirection"]
         echo_time = info_to_insert_dict['EchoTime']
-        scan_type = info_to_insert_dict['MriScanTypeID']
+        # C-BIG OVERRIDE START
+        # Remove when updating to LORIS 27
+        scan_type = info_to_insert_dict['Scan_type']
+        # C-BIG OVERRIDE END
         severity = info_to_insert_dict['Severity']
         header = info_to_insert_dict['Header']
         value = info_to_insert_dict['Value']
@@ -327,10 +329,12 @@ class Imaging:
             info_to_insert_dict['TarchiveID']
         )
         for row in existing_viol_logs:
+            # C-BIG OVERRIDE START
+            # Remove when updating to LORIS 27
             if str(row['SeriesUID']) == str(series_uid) \
                     and str(row['PhaseEncodingDirection']) == str(phase_encoding_dir) \
                     and str(row['EchoNumber']) == str(echo_number) \
-                    and str(row['MriScanTypeID']) == str(scan_type) \
+                    and str(row['Scan_type']) == str(scan_type) \
                     and str(row['EchoTime']) == str(echo_time) \
                     and str(row['Severity']) == str(severity) \
                     and str(row['Header']) == str(header) \
@@ -338,6 +342,7 @@ class Imaging:
                     and str(row['ValidRange']) == str(valid_range) \
                     and str(row['ValidRegex']) == str(valid_regex):
                 return
+            # C-BIG OVERRIDE END
 
         self.mri_viol_log_db_obj.insert_violations_log(info_to_insert_dict)
 
@@ -517,11 +522,14 @@ class Imaging:
          :rtype: int
         """
 
+        # C-BIG OVERRIDE START
+        # Remove when updating to LORIS 27
         query = "SELECT CandID " + \
                 " FROM session s " + \
-                " JOIN candidate c ON (c.ID=s.CandidateID)" \
+                " JOIN candidate c ON (c.CandID=s.CandID)" \
                 " JOIN files f ON (s.ID=f.SessionID) " + \
                 " WHERE FileID = %s"
+        # C-BIG OVERRIDE END
 
         results = self.db.pselect(query=query, args=(file_id,))
 
@@ -653,15 +661,18 @@ class Imaging:
 
         matching_protocols_list = []
         for protocol in protocols_list:
-            if scan_type_id and protocol['MriScanTypeID'] == scan_type_id:
-                matching_protocols_list.append(protocol['MriScanTypeID'])
+            # C-BIG OVERRIDE START
+            # Remove when updating to LORIS 27
+            if scan_type_id and protocol['Scan_type'] == scan_type_id:
+                matching_protocols_list.append(protocol['Scan_type'])
             elif protocol['series_description_regex']:
                 if re.search(
                         rf"{protocol['series_description_regex']}", scan_param['SeriesDescription'], re.IGNORECASE
                 ):
-                    matching_protocols_list.append(protocol['MriScanTypeID'])
+                    matching_protocols_list.append(protocol['Scan_type'])
             elif self.is_scan_protocol_matching_db_protocol(protocol, scan_param):
-                matching_protocols_list.append(protocol['MriScanTypeID'])
+                matching_protocols_list.append(protocol['Scan_type'])
+            # C-BIG OVERRIDE END
 
         return list(dict.fromkeys(matching_protocols_list))
 
@@ -962,7 +973,10 @@ class Imaging:
         for file_dict in files_list:
 
             bids_info = self.mri_prot_db_obj.get_bids_info_for_scan_type_id(
-                file_dict['MriScanTypeID']
+                # C-BIG OVERRIDE START
+                # Remove when updating to LORIS 27
+                file_dict['AcquisitionProtocolID']
+                # C-BIG OVERRIDE END
             )
             param_file_result = self.param_file_db_obj.get_parameter_file_for_file_id_param_type_id(
                 file_dict['FileID'],
@@ -1025,7 +1039,10 @@ class Imaging:
         new_files_list = []
         for file_dict in files_list:
             bids_info = self.mri_prot_db_obj.get_bids_info_for_scan_type_id(
-                file_dict['MriScanTypeID']
+                # C-BIG OVERRIDE START
+                # Remove when updating to LORIS 27
+                file_dict['AcquisitionProtocolID']
+                # C-BIG OVERRIDE END
             )
             param_file_result = self.param_file_db_obj.get_parameter_file_for_file_id_param_type_id(
                 file_dict['FileID'],

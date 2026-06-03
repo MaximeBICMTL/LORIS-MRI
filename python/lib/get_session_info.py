@@ -245,7 +245,10 @@ def create_session(
     """
 
     session = DbSession(
-        candidate_id     = candidate.id,
+        # C-BIG OVERRIDE START
+        # Remove when updating to LORIS 27
+        cand_id          = candidate.cand_id,
+        # C-BIG OVERRIDE END
         visit_label      = visit_label,
         visit_number     = visit_number,
         site_id          = create_session_info.site.id,

@@ -1,7 +1,6 @@
 from sqlalchemy import ForeignKey
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
-import lib.db.models.user as db_user
 from lib.db.base import Base
 from lib.db.decorators.int_bool import IntBool
 
@@ -18,7 +17,4 @@ class DbBidsEventFileMapping(Base):
     description        : Mapped[str | None]  = mapped_column('Description')
     has_pairing        : Mapped[bool | None] = mapped_column('HasPairing', IntBool, default=False)
     pair_rel_id        : Mapped[int | None]  = mapped_column('PairRelID')
-    additional_members : Mapped[int | None]  = mapped_column('AdditionalMembers', default=0)
-    tagger_id          : Mapped[int | None]  = mapped_column('TaggedBy', ForeignKey('users.ID'))
-
-    tagger: Mapped['db_user.DbUser | None'] = relationship('DbUser')
+    additional_members : Mapped[int | None]  = mapped_column('AdditionalMembers',  default=0)

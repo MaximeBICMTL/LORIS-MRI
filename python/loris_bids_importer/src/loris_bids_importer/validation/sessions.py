@@ -94,7 +94,10 @@ def create_bids_session(
     )
 
     session = DbSession(
-        candidate_id     = candidate.id,
+        # C-BIG OVERRIDE START
+        # Remove when updating to LORIS 27
+        cand_id          = candidate.cand_id,
+        # C-BIG OVERRIDE END
         visit_label      = visit_label,
         site_id          = candidate.registration_site_id,
         project_id       = candidate.registration_project_id,

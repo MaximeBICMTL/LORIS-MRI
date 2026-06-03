@@ -22,7 +22,12 @@ def get_integration_database_engine():
     Python configuration file.
     """
 
-    config = load_config('config.py')
+    # C-BIG OVERRIDE START
+    # Remove when adopting the new config system
+    # - https://github.com/aces/loris-mri/pull/1317
+    # - https://github.com/aces/loris-mri/pull/1318
+    config = load_config('database_config.py')
+    # C-BIG OVERRIDE END
     return get_database_engine(config.mysql)
 
 

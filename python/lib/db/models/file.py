@@ -25,7 +25,10 @@ class DbFile(Base):
     echo_number                    : Mapped[str | None]   = mapped_column('EchoNumber')
     coordinate_space               : Mapped[str | None]   = mapped_column('CoordinateSpace')
     output_type                    : Mapped[str]          = mapped_column('OutputType', default='')
-    scan_type_id                   : Mapped[int | None]   = mapped_column('MriScanTypeID')
+    # C-BIG OVERRIDE START
+    # Remove when updating to LORIS 27
+    scan_type_id                   : Mapped[int | None]   = mapped_column('AcquisitionProtocolID')
+    # C-BIG OVERRIDE END
     file_type                      : Mapped[str | None]   = mapped_column('FileType')
     inserted_by_user_id            : Mapped[str]          = mapped_column('InsertedByUserID', default='')
     insert_time                    : Mapped[datetime]     = mapped_column('InsertTime', IntDatetime, default=datetime.fromtimestamp(0))

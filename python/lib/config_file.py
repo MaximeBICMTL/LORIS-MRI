@@ -111,11 +111,17 @@ def load_config(arg: str | None) -> Any:
         print("ERROR: Environment variable 'LORIS_CONFIG' not set.", file=sys.stderr)
         sys.exit(lib.exitcode.INVALID_ENVIRONMENT_VAR)
 
+    # C-BIG OVERRIDE START
+    # Remove when adopting the new config system
+    # - https://github.com/aces/loris-mri/pull/1317
+    # - https://github.com/aces/loris-mri/pull/1318
+
     # Get the name of the configuration file from the argument or use the default name.
-    config_file_name = arg if arg is not None else 'config.py'
+    config_file_name = arg if arg is not None else 'database_config.py'
 
     config_dir_path = Path(config_dir_path_value).resolve()
-    config_file_path = (config_dir_path / config_file_name).resolve()
+    config_file_path = (config_dir_path / '.loris_mri' / config_file_name).resolve()
+    # C-BIG OVERRIDE END
 
     if not config_file_path.is_relative_to(config_dir_path):
         print(

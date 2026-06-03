@@ -97,10 +97,13 @@ def main():
     for eeg_dataset in eeg_dataset_list:
         uploadid = str(eeg_dataset['UploadID'])
 
+        # C-BIG OVERRIDE START
+        # Remove when updating to LORIS 27
         query = "SELECT c.CandID, c.PSCID, s.Visit_label " \
             " FROM session s " \
-            " JOIN candidate c ON c.ID = s.CandidateID " \
+            " JOIN candidate c ON c.CandID = s.CandID " \
             " WHERE s.ID = %s" \
+        # C-BIG OVERRIDE END
 
         session_data = db.pselect(query, (eeg_dataset['SessionID'],))
 

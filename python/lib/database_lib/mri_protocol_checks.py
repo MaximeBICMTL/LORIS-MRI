@@ -52,9 +52,12 @@ class MriProtocolChecks:
          :rtype: list
         """
 
+        # C-BIG OVERRIDE START
+        # Remove when updating to LORIS 27
         query = "SELECT * FROM mri_protocol_checks" \
                 " JOIN mri_protocol_checks_group_target mpcgt USING (MriProtocolChecksGroupID)" \
-                " WHERE MriScanTypeID = %s "
+                " WHERE Scan_type = %s "
+        # C-BIG OVERRIDE END
 
         query += " AND (mpcgt.ProjectID IS NULL OR mpcgt.ProjectID = %s)" \
             if project_id else " AND mpcgt.ProjectID IS NULL"

@@ -91,9 +91,11 @@ class Session:
                   + " for CandID "  + self.cand_id)
 
         # fetch the candidate.ID associated to the CandID first
-        candidate_id = self.candidate_db_obj.get_candidate_id(self.cand_id)
-        column_names = ('CandidateID', 'Visit_label', 'CenterID', 'Current_stage')
-        values = (candidate_id, self.visit_label, str(self.center_id), 'Not Started')
+        # C-BIG OVERRIDE START
+        # Remove when updating to LORIS 27
+        column_names = ('CandID', 'Visit_label', 'CenterID', 'Current_stage')
+        values = (self.cand_id, self.visit_label, str(self.center_id), 'Not Started')
+        # C-BIG OVERRIDE END
 
         if self.project_id:
             column_names = (*column_names, 'ProjectID')
@@ -127,12 +129,15 @@ class Session:
         # TODO refactor bids_import pipeline to use same functions as dcm2bids below. To be done in
         # different PR though
         loris_session_info = self.db.pselect(
+            # C-BIG OVERRIDE START
+            # Remove when updating to LORIS 27
             """
             SELECT PSCID, CandID, session.*
             FROM session
-                JOIN candidate ON (candidate.ID=session.CandidateID)
+                JOIN candidate ON (candidate.CandID=session.CandID)
             WHERE CandID = %s AND Visit_label = %s
             """,
+            # C-BIG OVERRIDE END
             (self.cand_id, self.visit_label)
         )
 
