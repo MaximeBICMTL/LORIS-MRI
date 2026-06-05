@@ -35,7 +35,7 @@ if __name__ == '__main__':
             eog=None,
             misc=None,
             exclude=(),
-            preload=False,
+            file_type=mne_edf.FileType.EDF,
             infer_types=False
         )
         channel_names = edf_info['ch_names']

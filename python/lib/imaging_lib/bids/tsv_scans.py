@@ -26,7 +26,7 @@ def read_bids_scans_tsv_file(scans_tsv_path: str) -> dict[str, BidsTsvScan]:
     """
 
     tsv_scans: dict[str, BidsTsvScan] = {}
-    with open(scans_tsv_path) as scans_tsv_file:
+    with open(scans_tsv_path, encoding='utf-8-sig') as scans_tsv_file:
         reader = csv.DictReader(scans_tsv_file.readlines(), delimiter='\t')
         if reader.fieldnames is None or 'filename' not in reader.fieldnames:
             raise Exception(f"Missing 'filename' field in scans.tsv file '{scans_tsv_path}'.")
