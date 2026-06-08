@@ -5,14 +5,14 @@ from lib.env import Env
 from lib.logging import log, log_error
 from loris_bids_utils.info import BidsAcquisitionInfo
 
-from loris_bids_importer.env import BidsImportEnv
+from loris_bids_importer.importer import BidsImporter
 
 T = TypeVar('T')
 
 
 def import_bids_acquisitions(
     env: Env,
-    import_env: BidsImportEnv,
+    import_env: BidsImporter,
     acquisitions: list[tuple[T, BidsAcquisitionInfo]],
     importer: Callable[[T, BidsAcquisitionInfo], None]
 ):
