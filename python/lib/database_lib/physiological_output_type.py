@@ -3,7 +3,7 @@
 from typing_extensions import deprecated
 
 
-@deprecated('Use `lib.db.models.physio_output_type.DbPhysioOutputType` instead')
+@deprecated("Use `lib.db.models.physio_output_type.DbPhysioOutputType` instead.")
 class PhysiologicalOutputType:
 
     def __init__(self, db, verbose):

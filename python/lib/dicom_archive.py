@@ -7,7 +7,7 @@ from lib.database_lib.tarchive import Tarchive
 from lib.database_lib.tarchive_series import TarchiveSeries
 
 
-@deprecated('Use `lib.db.models.dicom_archive.DbDicomArchive` instead')
+@deprecated("Use `lib.db.models.dicom_archive.DbDicomArchive` instead.")
 class DicomArchive:
     """
     This class gather functions that interact with the database and allow session
@@ -45,7 +45,7 @@ class DicomArchive:
 
         self.tarchive_info_dict = dict()
 
-    @deprecated('Use `lib.db.queries.dicom_archive.try_get_dicom_archive_with_archive_location` instead')
+    @deprecated("Use `lib.db.queries.dicom_archive.try_get_dicom_archive_with_archive_location` instead.")
     def populate_tarchive_info_dict_from_archive_location(self, archive_location):
         """
         Populate the DICOM archive information dictionary (self.tarchive_info_dict) with information
@@ -56,7 +56,7 @@ class DicomArchive:
         """
         self.tarchive_info_dict = self.tarchive_db_obj.create_tarchive_dict(archive_location=archive_location)
 
-    @deprecated('Use `lib.db.queries.dicom_archive.try_get_dicom_archive_with_id` instead')
+    @deprecated("Use `lib.db.queries.dicom_archive.try_get_dicom_archive_with_id` instead.")
     def populate_tarchive_info_dict_from_tarchive_id(self, tarchive_id):
         """
         Populate the DICOM archive information dictionary (self.tarchive_info_dict) with information
@@ -67,7 +67,7 @@ class DicomArchive:
         """
         self.tarchive_info_dict = self.tarchive_db_obj.create_tarchive_dict(tarchive_id=tarchive_id)
 
-    @deprecated('Use `lib.db.queries.dicom_archive.try_get_dicom_archive_series_with_series_uid_echo_time` instead')
+    @deprecated("Use `lib.db.queries.dicom_archive.try_get_dicom_archive_series_with_series_uid_echo_time` instead.")
     def populate_tarchive_info_dict_from_series_uid_and_echo_time(self, series_uid, echo_time):
         """
         Populate the DICOM archive information dictionary (self.tarchive_info_dict) with information

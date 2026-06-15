@@ -7,7 +7,7 @@ from typing_extensions import deprecated
 from lib.database_lib.notification import Notification
 
 
-@deprecated('Use `lib.logging` instead')
+@deprecated("Use `lib.logging` instead.")
 class Log:
     """
     Class that handles the log edition of the imaging pipeline.
@@ -47,7 +47,7 @@ class Log:
 
         self.create_log_header()
 
-    @deprecated('Use `lib.env.Env.init_notifier` instead')
+    @deprecated("Use `lib.env.Env.init_notifier` instead.")
     def initiate_notification_db_obj(self, upload_id):
         """
         Instantiate the notification_db_obj to be able to write in the notification table. This can

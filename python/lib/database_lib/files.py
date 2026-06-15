@@ -5,7 +5,7 @@ from typing_extensions import deprecated
 from lib.database_lib.parameter_type import ParameterType
 
 
-@deprecated('Use `lib.db.models.file.DbFile` instead.')
+@deprecated("Use `lib.db.models.file.DbFile` instead.")
 class Files:
     """
     This class performs database queries for imaging dataset stored in the files tables
@@ -76,7 +76,7 @@ class Files:
 
         return results[0] if results else None
 
-    @deprecated('Use `lib.db.queries.try_get_file_with_hash` instead.')
+    @deprecated("Use `lib.db.queries.try_get_file_with_hash` instead.")
     def find_file_with_hash(self, file_hash):
         """
         Select files stored in the `files` table with a given hash stored in `parameter_file`.
@@ -100,7 +100,7 @@ class Files:
 
         return results[0] if results else None
 
-    @deprecated('Use `lib.db.models.file.DbFile` instead.')
+    @deprecated("Use `lib.db.models.file.DbFile` instead.")
     def insert_files(self, field_value_dict):
         """
         Inserts into the `files` table a new row with file information.
@@ -119,7 +119,7 @@ class Files:
             get_last_id=True
         )
 
-    @deprecated('Use `lib.db.models.file.DbFile` instead.')
+    @deprecated("Use `lib.db.models.file.DbFile` instead.")
     def update_files(self, file_id, fields, values):
         """
         Inserts into the `files` table a new row with file information.
@@ -184,7 +184,7 @@ class Files:
 
         return self.db.pselect(query=query, args=(tarchive_id, scan_type_id, "series_number"))
 
-    @deprecated('Use `lib.db.models.dicom_archive.DbDicomArchive.mri_files` instead.')
+    @deprecated("Use `lib.db.models.dicom_archive.DbDicomArchive.mri_files` instead.")
     def get_files_inserted_for_tarchive_id(self, tarchive_id):
         """
         Get the list of files that were inserted into the `files` table for a given `TarchiveID`.
@@ -201,7 +201,7 @@ class Files:
 
         return self.db.pselect(query=query, args=(tarchive_id,))
 
-    @deprecated('Use `lib.db.models.session.DbSession.files` instead.')
+    @deprecated("Use `lib.db.models.session.DbSession.files` instead.")
     def get_files_inserted_for_session_id(self, session_id):
         """
         Get the list of files that were inserted into the `files` table for a given `SessionID`.

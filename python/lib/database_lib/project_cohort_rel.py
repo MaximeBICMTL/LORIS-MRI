@@ -3,7 +3,7 @@
 from typing_extensions import deprecated
 
 
-@deprecated('Use `lib.db.models.project_cohort.DbProjectCohort` instead')
+@deprecated("Use `lib.db.models.project_cohort.DbProjectCohort` instead.")
 class ProjectCohortRel:
     """
     This class performs database queries for project_cohort_rel table.
@@ -35,7 +35,7 @@ class ProjectCohortRel:
         self.db = db
         self.verbose = verbose
 
-    @deprecated('Use `lib.db.models.project_cohort.DbProjectCohort` instead')
+    @deprecated("Use `lib.db.models.project_cohort.DbProjectCohort` instead.")
     def create_proj_cohort_rel_dict(self, project_id, cohort_id):
         """
         Get the project/cohort rel information for a given project ID and cohort ID.

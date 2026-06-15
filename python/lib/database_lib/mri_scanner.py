@@ -7,7 +7,7 @@ from typing_extensions import deprecated
 from lib.candidate import Candidate
 
 
-@deprecated('Use `lib.scanner` instead')
+@deprecated("Use `lib.scanner` instead.")
 class MriScanner:
     """
     This class performs database queries for imaging dataset stored in the mri_scanner table.
@@ -39,7 +39,7 @@ class MriScanner:
         self.db = db
         self.verbose = verbose
 
-    @deprecated('Use `lib.scanner.get_or_create_scanner` instead')
+    @deprecated("Use `lib.scanner.get_or_create_scanner` instead.")
     def determine_scanner_information(self, manufacturer, software_version, serial_number, scanner_model,
                                       center_id, project_id):
         """
@@ -83,7 +83,7 @@ class MriScanner:
         )
         return scanner_id
 
-    @deprecated('Use `lib.scanner.get_or_create_scanner` instead')
+    @deprecated("Use `lib.scanner.get_or_create_scanner` instead.")
     def register_new_scanner(self, manufacturer, software_version, serial_number, scanner_model, center_id, project_id):
         """
         Inserts a new entry in the mri_scanner table after having created a new candidate to
@@ -135,7 +135,7 @@ class MriScanner:
 
         return scanner_id
 
-    @deprecated('Use `lib.db.models.mri_scanner.DbMriScanner.candidate` instead')
+    @deprecated("Use `lib.db.models.mri_scanner.DbMriScanner.candidate` instead.")
     def get_scanner_candid(self, scanner_id):
         """
         Select a ScannerID CandID based on the scanner ID in mri_scanner.

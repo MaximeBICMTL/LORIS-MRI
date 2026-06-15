@@ -76,7 +76,7 @@ class Imaging:
         self.param_type_db_obj = ParameterType(db, verbose)
         self.param_file_db_obj = ParameterFile(db, verbose)
 
-    @deprecated('Use `loris_bids_importer.file_type.get_check_bids_imaging_file_type_from_extension` instead.')
+    @deprecated("Use `loris_bids_importer.file_type.get_check_bids_imaging_file_type_from_extension` instead.")
     def determine_file_type(self, file):
         """
         Greps all file types defined in the ImagingFileTypes table and checks
@@ -101,7 +101,7 @@ class Imaging:
 
         return file_type
 
-    @deprecated('Use `lib.db.queries.try_get_file_with_hash` instead.')
+    @deprecated("Use `lib.db.queries.try_get_file_with_hash` instead.")
     def grep_file_info_from_hash(self, hash_string):
         """
         Greps the file ID from the files table. If it cannot be found, the method will return None.
@@ -134,7 +134,7 @@ class Imaging:
             series_uid, echo_time, phase_enc_dir, echo_number
         )
 
-    @deprecated('Use `lib.imaging_lib.file.register_mri_file` instead.')
+    @deprecated("Use `lib.imaging_lib.file.register_mri_file` instead.")
     def insert_imaging_file(self, file_info_dict, parameter_file_data_dict):
         """
         Inserts the imaging file and its information into the files and parameter_file tables.
@@ -158,7 +158,7 @@ class Imaging:
 
         return file_id
 
-    @deprecated('Use `lib.imaging_lib.file_parameter.register_mri_file_parameter` instead.')
+    @deprecated("Use `lib.imaging_lib.file_parameter.register_mri_file_parameter` instead.")
     def insert_parameter_file(self, file_id, parameter_name, value):
         """
         Insert a row into the parameter_file table for the provided FileID,
@@ -341,7 +341,7 @@ class Imaging:
 
         self.mri_viol_log_db_obj.insert_violations_log(info_to_insert_dict)
 
-    @deprecated('Use `lib.imaging_lib.parameter.get_or_create_parameter_type` instead.')
+    @deprecated("Use `lib.imaging_lib.parameter.get_or_create_parameter_type` instead.")
     def get_parameter_type_id(self, parameter_name):
         """
         Greps ParameterTypeID from parameter_type table using parameter_name.
@@ -379,6 +379,7 @@ class Imaging:
 
         return param_type_id
 
+    @deprecated("Use `lib.db.queries.mri_scan_type.try_get_mri_scan_type_with_id` instead.")
     def get_scan_type_name_from_id(self, scan_type_id):
         """
         Returns the scan type name associated to an acquisition protocol ID.
@@ -391,6 +392,7 @@ class Imaging:
         """
         return self.mri_scan_type_db_obj.get_scan_type_name_from_id(scan_type_id)
 
+    @deprecated("Use `lib.db.queries.mri_scan_type.try_get_mri_scan_type_with_name` instead.")
     def get_scan_type_id_from_scan_type_name(self, scan_type_name):
         """
         Returns the acquisition protocol ID associated to a scan type name.
@@ -403,7 +405,7 @@ class Imaging:
         """
         return self.mri_scan_type_db_obj.get_scan_type_id_from_name(scan_type_name)
 
-    @deprecated('Use `lib.imaging_lib.file_parameter.get_bids_to_loris_parameter_types_dict` instead')
+    @deprecated("Use `lib.imaging_lib.file_parameter.get_bids_to_loris_parameter_types_dict` instead.")
     def get_bids_to_minc_terms_mapping(self):
         """
         Returns the BIDS to MINC terms mapping queried from parameter_type table.
@@ -467,7 +469,7 @@ class Imaging:
         if param_type_id:
             return self.param_file_db_obj.get_parameter_file_for_file_id_param_type_id(file_id, param_type_id)
 
-    @deprecated('Use `lib.db.models.file.DbFile.file_type` instead.')
+    @deprecated("Use `lib.db.models.file.DbFile.file_type` instead.")
     def grep_file_type_from_file_id(self, file_id):
         """
         Greps the file type stored in the files table using its FileID.
@@ -486,7 +488,7 @@ class Imaging:
         # return the result
         return results[0]['FileType'] if results else None
 
-    @deprecated('Use `lib.db.models.file.DbFile.path` instead.')
+    @deprecated("Use `lib.db.models.file.DbFile.path` instead.")
     def grep_file_path_from_file_id(self, file_id):
         """
         Greps the file path stored in the files table using its FileID.
@@ -505,7 +507,7 @@ class Imaging:
         # return the result
         return results[0]['File'] if results else None
 
-    @deprecated('Use `lib.db.models.file.DbFile.candidate.cand_id` instead.')
+    @deprecated("Use `lib.db.models.file.DbFile.candidate.cand_id` instead.")
     def grep_cand_id_from_file_id(self, file_id):
         """
         Greps the CandID using the file's FileID.
@@ -528,6 +530,7 @@ class Imaging:
         # return the result
         return results[0]['CandID'] if results else None
 
+    @deprecated("Use `lib.imaging_lib.file_parameter.map_bids_to_loris_file_parameters` instead.")
     def map_bids_param_to_loris_param(self, file_parameters):
         """
         Maps the BIDS parameters found in the BIDS JSON file with the
@@ -808,7 +811,7 @@ class Imaging:
                 'MriProtocolChecksGroupID': hdr_checks_list[0]['MriProtocolChecksGroupID']
             }
 
-    @deprecated('Use `lib.imaging_lib.mri_scanner.get_or_create_scanner` instead')
+    @deprecated("Use `lib.imaging_lib.mri_scanner.get_or_create_scanner` instead.")
     def get_scanner_id(self, manufacturer, software_version, serial_nb, model_name, center_id, project_id):
         """
         Get the scanner ID based on the scanner information provided as input.
@@ -835,7 +838,7 @@ class Imaging:
             project_id
         )
 
-    @deprecated('Use `lib.db.models.DbScanner.candidate` instead')
+    @deprecated("Use `lib.db.models.DbScanner.candidate` instead.")
     def get_scanner_candid(self, scanner_id):
         """
         Select a ScannerID CandID based on the scanner ID in mri_scanner.
@@ -891,7 +894,7 @@ class Imaging:
 
         return sorted_fmap_files_dict
 
-    @deprecated('Use `lib.db.models.dicom_archive.DbDicomArchive.mri_files` instead.')
+    @deprecated("Use `lib.db.models.dicom_archive.DbDicomArchive.mri_files` instead.")
     def get_list_of_files_already_inserted_for_tarchive_id(self, tarchive_id):
         """
         Get the list of filenames already inserted for a given TarchiveID.
@@ -912,7 +915,7 @@ class Imaging:
 
         return files_list
 
-    @deprecated('Use `lib.db.models.session.DbSession.files` instead.')
+    @deprecated("Use `lib.db.models.session.DbSession.files` instead.")
     def get_list_of_files_already_inserted_for_session_id(self, session_id):
         """
         Get the list of filenames already inserted for a given SessionID.
@@ -1173,7 +1176,7 @@ class Imaging:
         extracted_dicom_dir_path = inner_tar_path.replace(".tar.gz", "")
         return extracted_dicom_dir_path
 
-    @deprecated('Use `lib.imaging_lib.nifti_pic.create_nifti_preview_picture` instead.')
+    @deprecated("Use `lib.imaging_lib.nifti_pic.create_nifti_preview_picture` instead.")
     @staticmethod
     def create_imaging_pic(file_info, pic_rel_path=None):
         """

@@ -3,7 +3,7 @@
 from typing_extensions import deprecated
 
 
-@deprecated('Use `lib.db.physio_file_parameter.DbPhysioFileParameter` instead')
+@deprecated("Use `lib.db.physio_file_parameter.DbPhysioFileParameter` instead.")
 class PhysiologicalParameterFile:
 
     def __init__(self, db, verbose):

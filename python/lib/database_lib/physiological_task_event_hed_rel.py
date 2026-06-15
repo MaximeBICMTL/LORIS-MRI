@@ -3,7 +3,7 @@
 from typing_extensions import deprecated
 
 
-@deprecated('Use `lib.db.models.physio_task_event_hed.DbPhysioTaskEventHed` instead.')
+@deprecated("Use `lib.db.models.physio_task_event_hed.DbPhysioTaskEventHed` instead.")
 class PhysiologicalTaskEventHEDRel:
 
     def __init__(self, db, verbose):

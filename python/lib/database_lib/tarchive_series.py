@@ -3,7 +3,7 @@
 from typing_extensions import deprecated
 
 
-@deprecated('Use `lib.db.models.dicom_archive_series.DbDicomArchiveSeries` instead')
+@deprecated("Use `lib.db.models.dicom_archive_series.DbDicomArchiveSeries` instead.")
 class TarchiveSeries:
     """
     This class performs database queries for tarchive_series table.
@@ -35,7 +35,7 @@ class TarchiveSeries:
         self.db = db
         self.verbose = verbose
 
-    @deprecated('Use `lib.db.queries.dicom_archive.try_get_dicom_archive_series_with_series_uid_echo_time` instead')
+    @deprecated("Use `lib.db.queries.dicom_archive.try_get_dicom_archive_series_with_series_uid_echo_time` instead.")
     def get_tarchive_series_from_series_uid_and_echo_time(self, series_uid, echo_time):
         """
         Create dictionary with DICOM archive information selected from the tarchive table.

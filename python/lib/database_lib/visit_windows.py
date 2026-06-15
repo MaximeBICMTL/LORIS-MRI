@@ -4,7 +4,7 @@
 from typing_extensions import deprecated
 
 
-@deprecated('Use `lib.db.models.visit_window.DbVisitWindow` instead')
+@deprecated("Use `lib.db.models.visit_window.DbVisitWindow` instead.")
 class VisitWindows:
     """
     This class performs database queries for the VisitWindows table.
@@ -36,7 +36,7 @@ class VisitWindows:
         self.db = db
         self.verbose = verbose
 
-    @deprecated('Use `lib.db.queries.visit.try_get_visit_window_with_visit_label` instead')
+    @deprecated("Use `lib.db.queries.visit.try_get_visit_window_with_visit_label` instead.")
     def check_visit_label_exists(self, visit_label: str) -> bool:
         """
         Check if a visit label exists in the Visit_Windows database table.

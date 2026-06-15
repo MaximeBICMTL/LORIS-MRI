@@ -3,7 +3,7 @@
 from typing_extensions import deprecated
 
 
-@deprecated('Use `lib.db.models.mri_scan_type.DbMriScanType` instead.')
+@deprecated("Use `lib.db.models.mri_scan_type.DbMriScanType` instead.")
 class MriScanType:
     """
     This class performs database queries for imaging dataset stored in the mri_scan_type table.
@@ -35,7 +35,7 @@ class MriScanType:
         self.db = db
         self.verbose = verbose
 
-    @deprecated('Use `lib.db.queries.mri_scan_type.try_get_mri_scan_type_with_id` instead.')
+    @deprecated("Use `lib.db.queries.mri_scan_type.try_get_mri_scan_type_with_id` instead.")
     def get_scan_type_name_from_id(self, scan_type_id):
         """
         Get a scan type name based on a scan type ID.
@@ -54,7 +54,7 @@ class MriScanType:
 
         return results[0]['MriScanTypeName'] if results else None
 
-    @deprecated('Use `lib.db.queries.mri_scan_type.try_get_mri_scan_type_with_name` instead.')
+    @deprecated("Use `lib.db.queries.mri_scan_type.try_get_mri_scan_type_with_name` instead.")
     def get_scan_type_id_from_name(self, scan_type_name):
         """
         Get a scan type ID based on a scan type name.

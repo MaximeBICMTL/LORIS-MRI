@@ -134,7 +134,7 @@ def create_dir(dir_name, verbose):
     return dir_name
 
 
-@deprecated('Use `loris_utils.archive.create_archive_with_files` instead')
+@deprecated("Use `loris_utils.archive.create_archive_with_files` instead.")
 def create_archive(files_to_archive, archive_path):
     """
     Creates an archive with the files listed in the files_to_archive tuple.
@@ -206,7 +206,7 @@ def update_set_file_path_info(set_file, with_fdt_file):
     return True
 
 
-@deprecated('Use `loris_utils.crypto.compute_file_blake2b_hash` instead.')
+@deprecated("Use `loris_utils.crypto.compute_file_blake2b_hash` instead.")
 def compute_blake2b_hash(file_path):
     """
     Compute the blake2b hash of a file and returns it.
@@ -219,7 +219,7 @@ def compute_blake2b_hash(file_path):
         return loris_utils.crypto.compute_file_blake2b_hash(file_path)
 
 
-@deprecated('Use `loris_utils.crypto.compute_file_md5_hash` instead.')
+@deprecated("Use `loris_utils.crypto.compute_file_md5_hash` instead.")
 def compute_md5_hash(file_path):
     """
     Compute the md5 hash of a file and returns it.
@@ -232,7 +232,7 @@ def compute_md5_hash(file_path):
         return loris_utils.crypto.compute_file_md5_hash(file_path)
 
 
-@deprecated('Use `lib.make_env.create_script_tmp_dir` instead.')
+@deprecated("Use `lib.make_env.create_script_tmp_dir` instead.")
 def create_processing_tmp_dir(template_prefix):
     """
     Creates a temporary directory with a name based on the concatenation of the
@@ -259,7 +259,7 @@ def create_processing_tmp_dir(template_prefix):
     return tmp_dir
 
 
-@deprecated('Use `loris_utils.fs.remove_empty_subdirectories` instead')
+@deprecated("Use `loris_utils.fs.remove_empty_subdirectories` instead.")
 def remove_empty_folders(path_abs):
 
     walk = list(os.walk(path_abs))

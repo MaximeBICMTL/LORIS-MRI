@@ -3,7 +3,7 @@
 from typing_extensions import deprecated
 
 
-@deprecated('Use `lib.db.models.dicom_archive.DbDicomArchive` instead')
+@deprecated("Use `lib.db.models.dicom_archive.DbDicomArchive` instead.")
 class Tarchive:
     """
     This class performs database queries for DICOM archives.
@@ -35,7 +35,7 @@ class Tarchive:
         self.db = db
         self.verbose = verbose
 
-    @deprecated('Use `lib.db.queries.dicom_archive.try_get_dicom_archive_with_*` instead')
+    @deprecated("Use `lib.db.queries.dicom_archive.try_get_dicom_archive_with_*` instead.")
     def create_tarchive_dict(self, archive_location=None, tarchive_id=None):
         """
         Create dictionary with DICOM archive information selected from the tarchive table.
@@ -64,7 +64,7 @@ class Tarchive:
 
         return results[0] if results else None
 
-    @deprecated('Use `lib.db.models.dicom_archive.DbDicomArchive` instead')
+    @deprecated("Use `lib.db.models.dicom_archive.DbDicomArchive` instead.")
     def update_tarchive(self, tarchive_id, fields, values):
         """
         Updates the tarchive table for a given TarchiveID.
