@@ -1,7 +1,9 @@
 from pathlib import Path
 
+from sqlalchemy import ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+import lib.db.models.bids_file as db_bids_file
 import lib.db.models.meg_ctf_head_shape_point as db_meg_ctf_head_shape_point
 from lib.db.base import Base
 from lib.db.decorators.string_path import StringPath
@@ -20,6 +22,11 @@ class DbMegCtfHeadShapeFile(Base):
     ID of the head shape file.
     """
 
+    bids_info_id: Mapped[int | None] = mapped_column('BidsInfoID', ForeignKey('bids_file.ID'))
+    """
+    The ID of the BIDS information of this head shape file, if any.
+    """
+
     path: Mapped[Path] = mapped_column('Path', StringPath)
     """
     Path of the head shape file relative to the LORIS data directory.
@@ -34,4 +41,9 @@ class DbMegCtfHeadShapeFile(Base):
     points: Mapped[list['db_meg_ctf_head_shape_point.DbMegCtfHeadShapePoint']] = relationship('DbMegCtfHeadShapePoint', back_populates='file')
     """
     3D points present in the head shape file.
+    """
+
+    bids_info: Mapped['db_bids_file.DbBidsFile | None'] = relationship('BidsInfoID')
+    """
+    The BIDS information of this head shape file, if any.
     """
