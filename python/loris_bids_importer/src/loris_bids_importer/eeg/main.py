@@ -33,9 +33,9 @@ from loris_bids_importer.copy_files import (
     get_loris_scans_path,
 )
 from loris_bids_importer.eeg.physiological import Physiological
-from loris_bids_importer.env import BidsImportEnv
 from loris_bids_importer.events import insert_bids_event_dict_file, insert_bids_events_file
 from loris_bids_importer.file_type import get_check_bids_imaging_file_type_from_extension
+from loris_bids_importer.importer import BidsImporter
 from loris_bids_importer.physio import (
     get_check_bids_physio_file_hash,
     get_check_bids_physio_modality,
@@ -50,7 +50,7 @@ class Eeg:
     into the database by calling the loris_bids_importer.eeg.physiological class.
     """
 
-    def __init__(self, env: Env, import_env: BidsImportEnv, bids_layout, bids_info: BidsDataTypeInfo,
+    def __init__(self, env: Env, importer: BidsImporter, bids_layout, bids_info: BidsDataTypeInfo,
                  session: DbSession, db, dataset_tag_dict, dataset_type):
         """
         Constructor method for the Eeg class.
@@ -75,8 +75,8 @@ class Eeg:
 
         # load the LORIS BIDS import root directory where the eeg files will
         # be copied
-        self.info                = import_env
-        self.data_dir            = self.info.data_dir_path
+        self.importer = importer
+        self.data_dir = self.importer.data_dir_path
 
         # load bids subject, visit and modality
         self.bids_info = bids_info
@@ -220,7 +220,7 @@ class Eeg:
             if get_ephys_visualization_enabled_config(self.env):
                 create_physio_channels_chunks(self.env, eeg_file)
 
-            self.info.imported_acquisitions_count += 1
+            self.importer.imported_acquisitions_count += 1
 
     def fetch_and_insert_eeg_files(self, derivatives=False, detect=True):
         """
@@ -311,7 +311,13 @@ class Eeg:
                 scan_row = self.scans_file.get_row(eeg_file_path)
                 if scan_row is not None:
                     eeg_acq_time = scan_row.get_acquisition_time()
-                    add_bids_scans_file_parameters(self.info, self.session, self.scans_file, scan_row, eeg_file_data)
+                    add_bids_scans_file_parameters(
+                        self.importer,
+                        self.session,
+                        self.scans_file,
+                        scan_row,
+                        eeg_file_data,
+                    )
 
             # if file type is set and fdt file exists, append fdt path to the
             # eeg_file_data dictionary
@@ -361,11 +367,11 @@ class Eeg:
             if self.scans_file is not None:
                 scan_row = self.scans_file.get_row(eeg_file_path)
                 if scan_row is not None:
-                    loris_scans_path = get_loris_scans_path(self.info, self.scans_file, self.session)
+                    loris_scans_path = get_loris_scans_path(self.importer, self.scans_file, self.session)
                     scan_row.set_file_name(eeg_path.name)
-                    add_bids_scan_row(self.info, scan_row, loris_scans_path)
+                    add_bids_scan_row(self.importer, scan_row, loris_scans_path)
 
-            if self.info.loris_bids_path:
+            if self.importer.loris_bids_path:
                 # If we copy the file in assembly_bids and
                 # if the EEG file was a set file, then update the filename for the .set
                 # and .fdt files in the .set file so it can find the proper file for
@@ -537,7 +543,7 @@ class Eeg:
         # Insert the channel data in the database.
         return insert_bids_channels_file(
             self.env,
-            self.info,
+            self.importer,
             physiological_file,
             self.session,
             self.bids_info,
@@ -662,7 +668,7 @@ class Eeg:
         """
 
         loris_file_path = get_loris_bids_file_path(
-            self.info,
+            self.importer,
             self.session,
             self.bids_info.data_type,
             Path(file),
@@ -673,7 +679,7 @@ class Eeg:
         # the same metadata file several times if it is shared acquisitions. A warning has been
         # added.
         # TODO: Properly handle metadata files shared across several acquisitions.
-        full_file_path = self.info.data_dir_path / loris_file_path
+        full_file_path = self.importer.data_dir_path / loris_file_path
         if full_file_path.exists():
             log_warning(
                 self.env,
@@ -682,5 +688,5 @@ class Eeg:
 
             return loris_file_path
 
-        copy_loris_bids_file(self.info, Path(file), loris_file_path)
+        copy_loris_bids_file(self.importer, Path(file), loris_file_path)
         return loris_file_path

@@ -14,12 +14,12 @@ from loris_utils.crypto import compute_file_blake2b_hash
 from loris_utils.error import group_errors, group_errors_tuple
 
 from loris_bids_importer.copy_files import get_loris_bids_file_path
-from loris_bids_importer.env import BidsImportEnv
+from loris_bids_importer.importer import BidsImporter
 
 
 def insert_bids_channels_file(
     env: Env,
-    import_env: BidsImportEnv,
+    importer: BidsImporter,
     physio_file: DbPhysioFile,
     session: DbSession,
     acquisition: BidsAcquisitionInfo,
@@ -30,7 +30,7 @@ def insert_bids_channels_file(
     """
 
     loris_channels_file_path = get_loris_bids_file_path(
-        import_env, session, acquisition.data_type, channels_file.path
+        importer, session, acquisition.data_type, channels_file.path
     )
 
     blake2_hash = compute_file_blake2b_hash(channels_file.path)

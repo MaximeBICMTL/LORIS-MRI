@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 @dataclass
-class BidsImportEnv:
+class BidsImporter:
     """
     Information about a specific BIDS import pipeline run.
     """
