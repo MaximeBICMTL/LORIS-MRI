@@ -51,7 +51,7 @@ class Eeg:
     """
 
     def __init__(self, env: Env, importer: BidsImporter, bids_layout, bids_info: BidsDataTypeInfo,
-                 session: DbSession, db, dataset_tag_dict, dataset_type):
+                 session: DbSession, db, dataset_tag_dict):
         """
         Constructor method for the Eeg class.
 
@@ -64,8 +64,6 @@ class Eeg:
         :param info         : The BIDS import pipeline information
         :param dataset_tag_dict      : Dict of dataset-inherited HED tags
          :type dataset_tag_dict      : dict
-        :param dataset_type          : raw | derivative. Type of the dataset
-         :type dataset_type          : string
         """
 
         self.env = env
@@ -82,7 +80,7 @@ class Eeg:
         self.bids_info = bids_info
 
         # load dataset tag dict. Used to ensure HED tags aren't duplicated
-        self.dataset_tag_dict   = dataset_tag_dict
+        self.dataset_tag_dict = dataset_tag_dict
 
         # load database handler object
         self.db = db
@@ -103,13 +101,14 @@ class Eeg:
             self.scans_file = BidsScansTsvFile(Path(scans_file_path))
 
         # register the data into LORIS
-        if (dataset_type and dataset_type == 'raw'):
-            self.register_data(detect=False)
-        elif (dataset_type and dataset_type == 'derivative'):
-            self.register_data(derivatives=True, detect=False)
-        else:
-            self.register_data()
-            self.register_data(derivatives=True)
+        match importer.args.type:
+            case 'raw':
+                self.register_data(detect=False)
+            case 'derivative':
+                self.register_data(derivatives=True, detect=False)
+            case None:
+                self.register_data()
+                self.register_data(derivatives=True)
 
         env.db.commit()
 

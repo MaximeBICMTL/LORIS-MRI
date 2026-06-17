@@ -42,7 +42,7 @@ def get_loris_bids_root_file_path(importer: BidsImporter, file_path: Path) -> Pa
     if importer.loris_bids_path is None:
         return file_path.relative_to(importer.data_dir_path)
 
-    return importer.loris_bids_path / file_path.relative_to(importer.source_bids_path)
+    return importer.loris_bids_path / file_path.relative_to(importer.args.source_bids_path)
 
 
 def get_loris_bids_file_path(
@@ -63,7 +63,7 @@ def get_loris_bids_file_path(
     # If the file is a derivative, the path is unpredictable, so return a copy of that path in the
     # LORIS BIDS dataset.
     if derivative:
-        return importer.loris_bids_path / file_path.relative_to(importer.source_bids_path)
+        return importer.loris_bids_path / file_path.relative_to(importer.args.source_bids_path)
 
     # Otherwise, normalize the subject and session directory names using the LORIS session
     # information.
@@ -140,7 +140,7 @@ def copy_bids_static_files(importer: BidsImporter):
         return
 
     for file_name in ['README', 'dataset_description.json']:
-        source_file_path = importer.source_bids_path / file_name
+        source_file_path = importer.args.source_bids_path / file_name
         if not source_file_path.is_file():
             continue
 

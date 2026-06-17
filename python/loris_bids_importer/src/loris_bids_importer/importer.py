@@ -1,21 +1,37 @@
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+
+
+@dataclass
+class BidsImporterArgs:
+    """
+    The CLI arguments given to the BIDS importer.
+    """
+
+    source_bids_path: Path
+    type: Literal['raw', 'derivative', None]
+    bids_validation: bool
+    create_candidate: bool
+    create_session: bool
+    copy: bool
+    verbose: bool
 
 
 @dataclass
 class BidsImporter:
     """
-    Information about a specific BIDS import pipeline run.
+    Information about the current BIDS import pipeline run.
+    """
+
+    args: BidsImporterArgs
+    """
+    The CLI arguments given to the BIDS importer.
     """
 
     data_dir_path: Path
     """
     The LORIS data directory path.
-    """
-
-    source_bids_path: Path
-    """
-    The source BIDS directory path.
     """
 
     loris_bids_path: Path | None
