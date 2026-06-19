@@ -139,7 +139,7 @@ def import_bids_mri_acquisition(
     file_parameters['file_blake2b_hash'] = file_hash
 
     if bids_info.scans_file is not None and bids_info.scan_row is not None:
-        add_bids_scans_file_parameters(bids_info.scans_file, bids_info.scan_row, file_parameters)
+        add_bids_scans_file_parameters(import_env, session, bids_info.scans_file, bids_info.scan_row, file_parameters)
 
     for aux_file_type, aux_file_path in aux_file_paths:
         aux_file_hash = compute_file_blake2b_hash(aux_file_path)

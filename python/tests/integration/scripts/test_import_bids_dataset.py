@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 
 from lib.db.queries.bids_event_dataset_mapping import get_bids_event_dataset_mappings_with_project_id
@@ -27,9 +28,7 @@ def test_import_eeg_bids_dataset():
 
     # Check the return code.
     assert process.returncode == 0
-    assert process.stderr == (
-        "WARNING: No 'scans.tsv' file found, 'scans.tsv' data will be ignored.\n"
-    )
+    assert process.stderr == ""
 
     # Check that the candidate and sessions are present in the database.
     candidate = try_get_candidate_with_psc_id(db, 'OTT166')
@@ -47,6 +46,7 @@ def test_import_eeg_bids_dataset():
     assert len(file.channels) == 128
     assert len(file.event_files) == 1
     assert len(file.task_events) == 3185
+    assert file.acquisition_time == datetime(2025, 10, 10, 15, 1, 10)
     assert file.archive is not None
     assert file.archive.path == Path('bids_imports/Face13_BIDSVersion_1.1.0/sub-OTT166/ses-V1/eeg/sub-OTT166_ses-V1_task-faceO_eeg.tgz')  # noqa: E501
     assert file.event_archive is not None
@@ -82,6 +82,10 @@ def test_import_eeg_bids_dataset():
         'channel_file_blake2b_hash': '7b91e3650086ef50ecc00f1c50e17e7ad8dc39c484536bbc2423af4be7d2b50a3a0010f840d457fec68fbfb3e136edf4d616a31bab0ca09ed686f555727341dd',  # noqa: E501
         'event_file_blake2b_hash': '532aa0b52749eb9ee52c2bbb65fa7b1d00d7126cb9a4e10bd4b9dbb4c5527b06e30acdaf17d5806e81d3ce8ad224a9f456e27aba1bf8b92fd43522837c7ffec7',  # noqa: E501
         'electrophysiology_chunked_dataset_path': 'chunks/Face13_BIDSVersion_1.1.0_chunks/sub-OTT166_ses-V1_task-faceO_eeg.chunks',  # noqa: E501
+        'scan_acquisition_time': '2025-10-10 15:01:10.720100+00:00',
+        'age_at_scan': 'None',
+        'scans_tsv_file': 'bids_imports/Face13_BIDSVersion_1.1.0/sub-OTT166/ses-V1/sub-OTT166_ses-V1_scans.tsv',
+        'scans_tsv_file_blake2hash': '4d9b695ba6b35257531b96375ca15c36179b08360f373c46425d958e406132b84ad029113ed4be5e458e762a8af0792ddde5127b5044778c8c8705d8df8f8621',  # noqa: E501
     }
 
     # Check that the event files has been inserted in the database.

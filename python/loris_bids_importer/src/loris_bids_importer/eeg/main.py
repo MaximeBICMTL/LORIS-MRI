@@ -2,10 +2,8 @@
 
 import json
 import os
-import sys
 from pathlib import Path
 
-import lib.exitcode
 import lib.utilities as utilities
 from lib.config import get_ephys_visualization_enabled_config
 from lib.db.models.physio_file import DbPhysioFile
@@ -28,7 +26,7 @@ from loris_utils.crypto import compute_file_blake2b_hash
 
 from loris_bids_importer.archive import import_physio_event_archive, import_physio_file_archive
 from loris_bids_importer.channels import insert_bids_channels_file
-from loris_bids_importer.copy_files import copy_loris_bids_file, get_loris_bids_file_path, get_loris_scans_path
+from loris_bids_importer.copy_files import copy_loris_bids_file, get_loris_bids_file_path
 from loris_bids_importer.eeg.physiological import Physiological
 from loris_bids_importer.env import BidsImportEnv
 from loris_bids_importer.events import insert_bids_event_dict_file, insert_bids_events_file
@@ -38,6 +36,7 @@ from loris_bids_importer.physio import (
     get_check_bids_physio_modality,
     get_check_bids_physio_output_type,
 )
+from loris_bids_importer.scans import add_bids_scans_file_parameters
 
 
 class Eeg:
@@ -306,17 +305,8 @@ class Eeg:
             if self.scans_file is not None:
                 scan_info = self.scans_file.get_row(eeg_file_path)
                 if scan_info is not None:
-                    try:
-                        eeg_acq_time = scan_info.get_acquisition_time()
-                        eeg_file_data['age_at_scan'] = scan_info.get_age_at_scan()
-                    except Exception as error:
-                        print(f"ERROR: {error}")
-                        sys.exit(lib.exitcode.PROGRAM_EXECUTION_FAILURE)
-
-                    loris_scans_path = get_loris_scans_path(self.info, self.scans_file, self.session)
-                    eeg_file_data['scans_tsv_file'] = loris_scans_path
-                    scans_blake2 = compute_file_blake2b_hash(self.scans_file.path)
-                    eeg_file_data['physiological_scans_tsv_file_bake2hash'] = scans_blake2
+                    eeg_acq_time = scan_info.get_acquisition_time()
+                    add_bids_scans_file_parameters(self.info, self.session, self.scans_file, scan_info, eeg_file_data)
 
             # if file type is set and fdt file exists, append fdt path to the
             # eeg_file_data dictionary
