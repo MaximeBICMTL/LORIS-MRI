@@ -101,6 +101,7 @@ def test_import_eeg_bids_dataset():
             'README': None,
             'sub-OTT166': {
                 'ses-V1': {
+                    'sub-OTT166_ses-V1_scans.tsv': None,
                     'eeg': {
                         'sub-OTT166_ses-V1_task-faceO_channels.tsv': None,
                         'sub-OTT166_ses-V1_task-faceO_eeg.edf': None,
