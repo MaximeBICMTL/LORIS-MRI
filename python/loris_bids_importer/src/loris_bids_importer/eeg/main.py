@@ -32,6 +32,7 @@ from loris_bids_importer.copy_files import (
     get_loris_bids_file_path,
     get_loris_scans_path,
 )
+from loris_bids_importer.dataset import get_or_create_loris_bids_file
 from loris_bids_importer.eeg.physiological import Physiological
 from loris_bids_importer.events import insert_bids_event_dict_file, insert_bids_events_file
 from loris_bids_importer.file_type import get_check_bids_imaging_file_type_from_extension
@@ -291,6 +292,7 @@ class Eeg:
                 eeg_file_data = sidecar_json.data
 
                 sidecar_json_path = self.copy_file_to_loris_bids_dir(sidecar_json.path, derivatives)
+                get_or_create_loris_bids_file(self.env, self.importer, sidecar_json.path, sidecar_json_path)
                 eeg_file_data['eegjson_file'] = str(sidecar_json_path)
 
                 json_blake2 = compute_file_blake2b_hash(sidecar_json.path)
@@ -346,6 +348,13 @@ class Eeg:
                 eeg_file.path, derivatives
             )
 
+            bids_info = get_or_create_loris_bids_file(
+                self.env,
+                self.importer,
+                eeg_file_path,
+                eeg_path,
+            )
+
             # insert the file along with its information into
             # physiological_file and physiological_parameter_file tables
             physio_file = insert_physio_file(
@@ -355,7 +364,8 @@ class Eeg:
                 file_type,
                 modality,
                 output_type,
-                eeg_acq_time
+                eeg_acq_time,
+                bids_info=bids_info,
             )
 
             insert_physio_file_parameters(self.env, physio_file, eeg_file_data)
@@ -368,9 +378,9 @@ class Eeg:
                 if scan_row is not None:
                     loris_scans_path = get_loris_scans_path(self.importer, self.scans_file, self.session)
                     scan_row.set_file_name(eeg_path.name)
-                    add_bids_scan_row(self.importer, scan_row, loris_scans_path)
+                    add_bids_scan_row(self.env, self.importer, self.scans_file, scan_row, loris_scans_path)
 
-            if self.importer.loris_bids_path:
+            if self.importer.args.copy:
                 # If we copy the file in assembly_bids and
                 # if the EEG file was a set file, then update the filename for the .set
                 # and .fdt files in the .set file so it can find the proper file for
@@ -446,6 +456,7 @@ class Eeg:
                     # get the blake2b hash of the electrode file
                     blake2 = compute_file_blake2b_hash(electrode_file.path)
 
+                    get_or_create_loris_bids_file(self.env, self.importer, Path(electrode_file.path), electrode_path)
                     # insert the electrode data in the database
                     electrode_ids = physiological.insert_electrode_file(
                         electrode_data, electrode_path, physiological_file, blake2
@@ -486,6 +497,14 @@ class Eeg:
                             electrode_metadata = json.load(metadata_file)
                         # get the blake2b hash of the json events file
                         blake2 = compute_file_blake2b_hash(coordsystem_metadata_file.path)
+
+                        get_or_create_loris_bids_file(
+                            self.env,
+                            self.importer,
+                            Path(coordsystem_metadata_file.path),
+                            electrode_metadata_path,
+                        )
+
                         # insert event metadata in the database
                         physiological.insert_electrode_metadata(
                             electrode_metadata,
@@ -620,6 +639,7 @@ class Eeg:
 
                     _, file_tag_dict = insert_bids_event_dict_file(
                         self.env,
+                        self.importer,
                         EventDictFileSource.from_file(physiological_file),
                         event_dict_file,
                         event_metadata_path,
@@ -637,6 +657,7 @@ class Eeg:
             # insert event data in the database
             insert_bids_events_file(
                 self.env,
+                self.importer,
                 physiological_file,
                 events_data_file,
                 event_path,

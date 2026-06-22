@@ -14,6 +14,7 @@ from loris_utils.crypto import compute_file_blake2b_hash
 from loris_utils.error import group_errors, group_errors_tuple
 
 from loris_bids_importer.copy_files import get_loris_bids_file_path
+from loris_bids_importer.dataset import get_or_create_loris_bids_file
 from loris_bids_importer.importer import BidsImporter
 
 
@@ -48,6 +49,7 @@ def insert_bids_channels_file(
         ),
     )
 
+    get_or_create_loris_bids_file(env, importer, channels_file.path, loris_channels_file_path)
     insert_physio_file_parameter(env, physio_file, 'channel_file_blake2b_hash', blake2_hash)
 
     env.db.flush()

@@ -41,12 +41,12 @@ class DbFile(Base):
     acquisition_order_per_modality : Mapped[int | None]   = mapped_column('AcqOrderPerModality')
     acquisition_date               : Mapped[date | None]  = mapped_column('AcquisitionDate')
 
-    bids_info_id: Mapped[int | None] = mapped_column('BidsInfoID', ForeignKey('bids_file.ID'))
+    bids_info_id: Mapped[int | None] = mapped_column('BidsInfoID', ForeignKey('bids_file.ID', ondelete='SET NULL'))
     """
     The ID of the BIDS information of this file, if any.
     """
 
-    bids_info: Mapped['db_bids_file.DbBidsFile | None'] = relationship('BidsInfoID')
+    bids_info: Mapped['db_bids_file.DbBidsFile | None'] = relationship('DbBidsFile')
     """
     The BIDS information of this file, if any.
     """

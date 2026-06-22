@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import ForeignKey
@@ -22,7 +23,7 @@ class DbMegCtfHeadShapeFile(Base):
     ID of the head shape file.
     """
 
-    bids_info_id: Mapped[int | None] = mapped_column('BidsInfoID', ForeignKey('bids_file.ID'))
+    bids_info_id: Mapped[int | None] = mapped_column('BidsInfoID', ForeignKey('bids_file.ID', ondelete='SET NULL'))
     """
     The ID of the BIDS information of this head shape file, if any.
     """
@@ -30,6 +31,11 @@ class DbMegCtfHeadShapeFile(Base):
     path: Mapped[Path] = mapped_column('Path', StringPath)
     """
     Path of the head shape file relative to the LORIS data directory.
+    """
+
+    insert_time: Mapped[datetime] = mapped_column('InsertTime', default=datetime.now)
+    """
+    The time at which this head shape file was created in LORIS.
     """
 
     blake2b_hash: Mapped[str] = mapped_column('Blake2bHash')
@@ -43,7 +49,7 @@ class DbMegCtfHeadShapeFile(Base):
     3D points present in the head shape file.
     """
 
-    bids_info: Mapped['db_bids_file.DbBidsFile | None'] = relationship('BidsInfoID')
+    bids_info: Mapped['db_bids_file.DbBidsFile | None'] = relationship('DbBidsFile')
     """
     The BIDS information of this head shape file, if any.
     """

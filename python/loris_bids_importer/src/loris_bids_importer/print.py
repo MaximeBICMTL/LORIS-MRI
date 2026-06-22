@@ -23,7 +23,7 @@ def print_bids_info(env: Env, bids: BidsDatasetReader):
         log(env, f"- {data_type_name}")
 
 
-def print_bids_import_summary(env: Env, import_env: BidsImporter):
+def print_bids_import_summary(env: Env, importer: BidsImporter):
     """
     Print a summary of this BIDS import process.
     """
@@ -31,8 +31,8 @@ def print_bids_import_summary(env: Env, import_env: BidsImporter):
     log(
         env,
         (
-            f"Processed {import_env.processed_acquisitions_count} acquisitions, including"
-            f" {import_env.imported_acquisitions_count} imports, {import_env.ignored_acquisitions_count} ignores, and"
-            f" {import_env.failed_acquisitions_count} errors."
+            f"Processed {importer.processed_acquisitions_count} acquisitions, including"
+            f" {importer.imported_acquisitions_count} imports, {importer.ignored_acquisitions_count} ignores, and"
+            f" {importer.failed_acquisitions_count} errors."
         ),
     )

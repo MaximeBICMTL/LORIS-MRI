@@ -19,12 +19,12 @@ class DbBidsDataset(Base):
     The ID of this BIDS dataset.
     """
 
-    path: Mapped[Path] = mapped_column('Path', StringPath)
+    path: Mapped[Path] = mapped_column('Path', StringPath, unique=True)
     """
     The path of this BIDS dataset, relative to the LORIS data directory.
     """
 
-    insert_time: Mapped[datetime] = mapped_column('InsertTime')
+    insert_time: Mapped[datetime] = mapped_column('InsertTime', default=datetime.now)
     """
     The time at which this BIDS dataset was created in LORIS.
     """

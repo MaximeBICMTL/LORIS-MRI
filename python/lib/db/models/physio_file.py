@@ -39,12 +39,12 @@ class DbPhysioFile(Base):
     be a directory for MEG CTF data.
     """
 
-    bids_info_id: Mapped[int | None] = mapped_column('BidsInfoID', ForeignKey('bids_file.ID'))
+    bids_info_id: Mapped[int | None] = mapped_column('BidsInfoID', ForeignKey('bids_file.ID', ondelete='SET NULL'))
     """
     The ID of the BIDS information of this file, if any.
     """
 
-    head_shape_file_id: Mapped[int | None] = mapped_column('HeadShapeFileID', ForeignKey('meg_ctf_head_shape_file.ID'))
+    head_shape_file_id: Mapped[int | None] = mapped_column('HeadShapeFileID', ForeignKey('meg_ctf_head_shape_file.ID', ondelete='SET NULL'))
     """
     ID of the head shape file associated to this file, which is only present for MEG CTF files.
     """
@@ -59,7 +59,7 @@ class DbPhysioFile(Base):
     event_files   : Mapped[list['db_physio_event_file.DbPhysioEventFile']]         = relationship('DbPhysioEventFile', back_populates='physio_file')
     task_events   : Mapped[list['db_physio_task_event.DbPhysioTaskEvent']]         = relationship('DbPhysioTaskEvent', back_populates='physio_file')
 
-    bids_info: Mapped['db_bids_file.DbBidsFile | None'] = relationship('BidsInfoID')
+    bids_info: Mapped['db_bids_file.DbBidsFile | None'] = relationship('DbBidsFile')
     """
     The BIDS information of this file, if any.
     """

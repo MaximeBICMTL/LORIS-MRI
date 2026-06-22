@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any
 
+from lib.db.models.bids_file import DbBidsFile
 from lib.db.models.mri_scan_type import DbMriScanType
 from lib.db.models.session import DbSession
 from lib.db.queries.file import try_get_file_with_hash, try_get_file_with_path
@@ -19,6 +20,7 @@ from loris_utils.error import group_errors_tuple
 
 from loris_bids_importer.acquisitions import BidsImportFileResult, BidsImportFileStatus, import_bids_acquisitions
 from loris_bids_importer.copy_files import copy_loris_bids_file, get_loris_bids_file_path
+from loris_bids_importer.dataset import get_or_create_loris_bids_file
 from loris_bids_importer.file_type import get_check_bids_imaging_file_type_from_extension
 from loris_bids_importer.importer import BidsImporter
 from loris_bids_importer.mri.sidecar import add_bids_mri_sidecar_file_parameters
@@ -147,16 +149,26 @@ def import_bids_mri_acquisition(
         file_parameters[f'bids_{aux_file_type}_blake2b_hash'] = aux_file_hash
 
     # Copy the files on the file system.
+    copied_bids_files: dict[Path, DbBidsFile] = {}
     for copied_file_path, loris_copied_file_path in files_to_copy:
         copy_loris_bids_file(importer, copied_file_path, loris_copied_file_path)
+        copied_bids_files[loris_copied_file_path] = get_or_create_loris_bids_file(
+            env,
+            importer,
+            copied_file_path,
+            loris_copied_file_path,
+        )
 
     # Register the file and its parameters in the database.
+
+    bids_file = copied_bids_files[loris_file_path]
 
     file = register_mri_file(
         env,
         loris_file_path,
         file_type,
         session,
+        bids_file,
         scan_type,
         None,
         None,

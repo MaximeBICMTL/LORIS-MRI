@@ -75,7 +75,7 @@ def import_bids_acquisitions(
                     if bids_info.scans_file is not None and bids_info.scan_row is not None:
                         loris_scans_path = get_loris_scans_path(importer, bids_info.scans_file, session)
                         bids_info.scan_row.set_file_name(result.path.name)
-                        add_bids_scan_row(importer, bids_info.scan_row, loris_scans_path)
+                        add_bids_scan_row(env, importer, bids_info.scans_file, bids_info.scan_row, loris_scans_path)
 
                     importer.imported_acquisitions_count += 1
                     log(env, f"Successfully imported acquisition '{bids_info.name}'.")

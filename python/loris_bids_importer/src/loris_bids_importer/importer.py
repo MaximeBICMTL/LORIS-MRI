@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from lib.db.models.bids_dataset import DbBidsDataset
+
 
 @dataclass
 class BidsImporterArgs:
@@ -34,9 +36,9 @@ class BidsImporter:
     The LORIS data directory path.
     """
 
-    loris_bids_path: Path | None
+    loris_bids_dataset: DbBidsDataset
     """
-    The LORIS BIDS directory path for this import, relative to the LORIS data directory.
+    The LORIS BIDS dataset populated by this import.
     """
 
     imported_acquisitions_count: int = 0

@@ -25,7 +25,7 @@ class DbPhysioEventFile(Base):
     last_update    : Mapped[datetime]    = mapped_column('LastUpdate', default=datetime.now)
     last_written   : Mapped[datetime]    = mapped_column('LastWritten', default=datetime.now)
 
-    bids_info_id: Mapped[int | None] = mapped_column('BidsInfoID', ForeignKey('bids_file.ID'))
+    bids_info_id: Mapped[int | None] = mapped_column('BidsInfoID', ForeignKey('bids_file.ID', ondelete='SET NULL'))
     """
     The ID of the BIDS information of this event file, if any.
     """
@@ -36,7 +36,7 @@ class DbPhysioEventFile(Base):
     task_events       : Mapped[list['db_physio_task_event.DbPhysioTaskEvent']]           = relationship('DbPhysioTaskEvent', back_populates='event_file')
     event_parameters  : Mapped[list['db_physio_event_parameter.DbPhysioEventParameter']] = relationship('DbPhysioEventParameter', back_populates='event_file')
 
-    bids_info: Mapped['db_bids_file.DbBidsFile | None'] = relationship('BidsInfoID')
+    bids_info: Mapped['db_bids_file.DbBidsFile | None'] = relationship('DbBidsFile')
     """
     The BIDS information of this event file, if any.
     """
