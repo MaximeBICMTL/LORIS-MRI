@@ -63,7 +63,10 @@ class BidsScansTsvFile(BidsTsvFile[BidsScanTsvRow]):
         Get the row corresponding to the given file path.
         """
 
-        return find(self.rows, lambda row: file_path.name == row.data['filename'])
+        # According to the specification, the 'filename' column is the path of the acquisition file
+        # relative to the directory in which the scans.tsv file is located.
+        relative_path = file_path.relative_to(self.path.parent)
+        return find(self.rows, lambda row: str(relative_path) == row.data['filename'])
 
     def set_row(self, scan: BidsScanTsvRow):
         """
