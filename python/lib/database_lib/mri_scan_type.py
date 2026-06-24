@@ -1,9 +1,9 @@
 """This class performs database queries for the site mri_scan_type table"""
 
+from typing_extensions import deprecated
 
-__license__ = "GPLv3"
 
-
+@deprecated('Use `lib.db.models.mri_scan_type.DbMriScanType` instead.')
 class MriScanType:
     """
     This class performs database queries for imaging dataset stored in the mri_scan_type table.
@@ -35,6 +35,7 @@ class MriScanType:
         self.db = db
         self.verbose = verbose
 
+    @deprecated('Use `lib.db.queries.mri_scan_type.try_get_mri_scan_type_with_id` instead.')
     def get_scan_type_name_from_id(self, scan_type_id):
         """
         Get a scan type name based on a scan type ID.
@@ -47,12 +48,13 @@ class MriScanType:
         """
 
         results = self.db.pselect(
-            query='SELECT Scan_type FROM mri_scan_type WHERE ID = %s',
+            query='SELECT MriScanTypeName FROM mri_scan_type WHERE MriScanTypeID = %s',
             args=(scan_type_id,)
         )
 
-        return results[0]['Scan_type'] if results else None
+        return results[0]['MriScanTypeName'] if results else None
 
+    @deprecated('Use `lib.db.queries.mri_scan_type.try_get_mri_scan_type_with_name` instead.')
     def get_scan_type_id_from_name(self, scan_type_name):
         """
         Get a scan type ID based on a scan type name.
@@ -65,8 +67,8 @@ class MriScanType:
         """
 
         results = self.db.pselect(
-            query='SELECT ID FROM mri_scan_type WHERE Scan_type = %s',
+            query='SELECT MriScanTypeID FROM mri_scan_type WHERE MriScanTypeName = %s',
             args=(scan_type_name,)
         )
 
-        return results[0]['ID'] if results else None
+        return results[0]['MriScanTypeID'] if results else None

@@ -8,8 +8,8 @@ from lib.db.base import Base
 class DbMriScanType(Base):
     __tablename__ = 'mri_scan_type'
 
-    id   : Mapped[int] = mapped_column('ID', primary_key=True)
-    name : Mapped[str] = mapped_column('Scan_type')
+    id   : Mapped[int] = mapped_column('MriScanTypeID', primary_key=True)
+    name : Mapped[str] = mapped_column('MriScanTypeName')
 
     protocol_checks : Mapped[list['db_mri_protocol_check.DbMriProtocolCheck']] \
         = relationship('DbMriProtocolCheck', back_populates='scan_type')
