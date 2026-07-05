@@ -31,13 +31,11 @@ def register_mri_file_parameter(env: Env, file: DbFile, parameter_name: str, par
 
     parameter = try_get_file_parameter_with_file_id_type_id(env.db, file.id, parameter_type.id)
     if parameter is None:
-        time = datetime.now()
-
         parameter = DbFileParameter(
             type_id     = parameter_type.id,
             file_id     = file.id,
             value       = parameter_value,
-            insert_time = time,
+            insert_time = datetime.now(),
         )
 
         env.db.add(parameter)
