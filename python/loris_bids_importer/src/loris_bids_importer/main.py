@@ -13,11 +13,9 @@ from loris_bids_utils.reader import BidsDatasetReader, BidsDataTypeReader, BidsS
 from loris_bids_importer.args import Args
 from loris_bids_importer.copy_files import (
     copy_bids_participants_file,
-    copy_bids_scans_file,
     copy_bids_static_files,
     get_loris_bids_dataset_path,
     get_loris_bids_root_file_path,
-    get_loris_scans_path,
 )
 from loris_bids_importer.eeg.main import Eeg
 from loris_bids_importer.env import BidsImportEnv
@@ -151,17 +149,6 @@ def import_bids_session(
     if session is None:
         # This should not happen as BIDS session labels should have been checked previously.
         log_error_exit(env, f"Visit not found for visit label '{visit_label}'.")
-
-    try:
-        # Read the scans.tsv property to raise an exception if the file is incorrect.
-        if bids_session.scans_file is not None:
-            loris_scans_path = get_loris_scans_path(import_env, bids_session.scans_file, session)
-            copy_bids_scans_file(import_env, bids_session.scans_file, loris_scans_path)
-    except Exception as exception:
-        log_warning(
-            env,
-            f"Error while reading the session scans.tsv file, scans.tsv data will be ignored. Full error:\n{exception}"
-        )
 
     # Process each data type directory.
 

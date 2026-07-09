@@ -26,7 +26,12 @@ from loris_utils.crypto import compute_file_blake2b_hash
 
 from loris_bids_importer.archive import import_physio_event_archive, import_physio_file_archive
 from loris_bids_importer.channels import insert_bids_channels_file
-from loris_bids_importer.copy_files import copy_loris_bids_file, get_loris_bids_file_path
+from loris_bids_importer.copy_files import (
+    add_bids_scan_row,
+    copy_loris_bids_file,
+    get_loris_bids_file_path,
+    get_loris_scans_path,
+)
 from loris_bids_importer.eeg.physiological import Physiological
 from loris_bids_importer.env import BidsImportEnv
 from loris_bids_importer.events import insert_bids_event_dict_file, insert_bids_events_file
@@ -303,10 +308,10 @@ class Eeg:
             # get the acquisition date of the EEG file or the age at the time of the EEG recording
             eeg_acq_time = None
             if self.scans_file is not None:
-                scan_info = self.scans_file.get_row(eeg_file_path)
-                if scan_info is not None:
-                    eeg_acq_time = scan_info.get_acquisition_time()
-                    add_bids_scans_file_parameters(self.info, self.session, self.scans_file, scan_info, eeg_file_data)
+                scan_row = self.scans_file.get_row(eeg_file_path)
+                if scan_row is not None:
+                    eeg_acq_time = scan_row.get_acquisition_time()
+                    add_bids_scans_file_parameters(self.info, self.session, self.scans_file, scan_row, eeg_file_data)
 
             # if file type is set and fdt file exists, append fdt path to the
             # eeg_file_data dictionary
@@ -350,6 +355,15 @@ class Eeg:
 
             insert_physio_file_parameters(self.env, physio_file, eeg_file_data)
             self.env.db.commit()
+
+            # Update the LORIS scans.tsv file.
+
+            if self.scans_file is not None:
+                scan_row = self.scans_file.get_row(eeg_file_path)
+                if scan_row is not None:
+                    loris_scans_path = get_loris_scans_path(self.info, self.scans_file, self.session)
+                    scan_row.set_file_name(eeg_path.name)
+                    add_bids_scan_row(self.info, scan_row, loris_scans_path)
 
             if self.info.loris_bids_path:
                 # If we copy the file in assembly_bids and
