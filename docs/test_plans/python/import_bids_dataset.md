@@ -2,8 +2,8 @@
 
 ## Preamble
 
-- The LORIS DICOM importer is a script to import a DICOM study in LORIS.
-- Take a look at the documentation in the `loris-dicom-importer` package README file.
+- The LORIS BIDS importer is a script to import a BIDS dataset in LORIS.
+- Take a look at the documentation in the `loris-bids-importer` package README file.
 
 ## Testing instructions
 
