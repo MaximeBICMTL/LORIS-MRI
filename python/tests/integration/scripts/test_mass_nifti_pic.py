@@ -25,7 +25,7 @@ def test_invalid_profile_arg():
     # Check return code, STDOUT and STDERR
     assert process.returncode == INVALID_PATH
     assert process.stdout == ""
-    assert process.stderr == "ERROR: No configuration file 'invalid_profile.py' found in the '/opt/loris/bin/mri/config' directory.\n"  # noqa: E501
+    assert process.stderr == "ERROR: No configuration file 'invalid_profile.py' found in the '/opt/loris/bin/mri/config' directory.\n"  # ruff:ignore[line-too-long]
 
 
 def test_smallest_id_bigger_than_largest_id():
@@ -76,7 +76,7 @@ def test_on_file_id_that_already_has_a_pic():
     # Check return code, STDOUT and STDERR
     assert process.returncode == SUCCESS
     assert process.stdout == ""
-    assert process.stderr == "WARNING: There is already a pic for file ID 2. Use -f or --force to overwrite it, skipping.\n"  # noqa: E501
+    assert process.stderr == "WARNING: There is already a pic for file ID 2. Use -f or --force to overwrite it, skipping.\n"  # ruff:ignore[line-too-long]
 
 
 def test_force_option():
