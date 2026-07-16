@@ -1084,19 +1084,17 @@ sub createNewCandID {
 
 =head3 getPSC($patientName, $dbhr, $db)
 
-Looks for the site alias using the C<session> table C<CenterID> as
-a first resource, for the cases where it is created using the front-end,
-otherwise, find the site alias in whatever field (usually C<patient_name>
-or C<patient_id>) is provided, and return the C<MRI_alias> and C<CenterID>.
+Looks for the C<CenterID> of a scan. If the configuration already provides a
+C<CenterID>, it is validated against the C<psc> table. Otherwise, the C<CenterID>
+is looked up using the C<session> table, and as a last resort by matching the site alias against whatever field
+(usually C<patient_name> or C<patient_id>) is provided.
 
 INPUTS:
   - $patientName: patient name
   - $dbhr       : database handle reference
   - $db         : database object
 
-RETURNS: a two element array:
-  - first is the MRI alias of the PSC or "UNKN"
-  - second is the C<CenterID> or 0
+RETURNS: the C<CenterID> or 0 if no center could be found
 
 =cut
 
@@ -1110,14 +1108,26 @@ sub getPSC {
                             $dbhr,
                             $db
                         );
+    ## If the configuration (e.g. the prod file) already provides a CenterID,
+    ## validate it against the psc table rather than trusting it blindly or
+    ## falling through to the error-prone patient-name matching below.
+    if ($subjectIDsref->{'CenterID'}) {
+        my $centerID = $subjectIDsref->{'CenterID'};
+        my $pscOB = NeuroDB::objectBroker::PSCOB->new( db => $db );
+        my $pscsRef = $pscOB->get({ CenterID => $centerID });
+        if (@$pscsRef) {
+            return $centerID;
+        }
+        return 0;
+    }
+
     my $PSCID = $subjectIDsref->{'PSCID'};
     my $visitLabel = $subjectIDsref->{'visitLabel'};
 
     ## Get the CenterID from the session table, if the PSCID and visit labels exist
     ## and could be extracted
     if ($PSCID && $visitLabel) {
-        my $query = "SELECT s.CenterID, p.MRI_alias FROM session s
-                    JOIN psc p on p.CenterID=s.CenterID
+        my $query = "SELECT s.CenterID FROM session s
                     JOIN candidate c on c.ID=s.CandidateID
                     WHERE c.PSCID = ? AND s.Visit_label = ?";
 
@@ -1125,21 +1135,21 @@ sub getPSC {
         $sth->execute($PSCID, $visitLabel);
         if ($sth->rows > 0) {
             my $row = $sth->fetchrow_hashref();
-            return ($row->{'MRI_alias'},$row->{'CenterID'});
+            return $row->{'CenterID'};
         }
     }
 
-    ## Otherwise, use the patient name to match it to the site alias or MRI alias
+    ## Otherwise, use the patient name to match it to the site alias
     my $pscOB   = NeuroDB::objectBroker::PSCOB->new( db => $db );
-    my $pscsRef = $pscOB->get({ MRI_alias => { NOT => '' } });
+    my $pscsRef = $pscOB->get({ Alias => { NOT => '' } });
 
     foreach my $psc (@$pscsRef) {
-        if ($patientName =~ /$psc->{'Alias'}/i || $patientName =~ /$psc->{'MRI_alias'}/i) {
-            return ($psc->{'MRI_alias'}, $psc->{'CenterID'});
+        if ($patientName =~ /$psc->{'Alias'}/i) {
+            return $psc->{'CenterID'};
         }
     }
 
-    return ("UNKN", 0);
+    return 0;
 }
 
 =pod

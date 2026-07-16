@@ -377,7 +377,6 @@ if (($output != 0)  && ($force==0)) {
 ################################################################
 my $centerID =
      $utility->determinePSC(\%tarchiveInfo, 0, $upload_id);
-my $mri_alias = $utility->getCenterNameFromCenterID($centerID);
 
 ################################################################
 ######### Determine the ScannerID ##############################
@@ -604,9 +603,14 @@ if ($valid_study) {
 }
 
 ################################################################
+#################### Get the center name #######################
+################################################################
+my $center_name = $utility->getCenterNameFromCenterID($centerID);
+
+################################################################
 # make final logfile name without overwriting phantom logs #####
 ################################################################
-my $final_logfile = $mri_alias;
+my $final_logfile = $center_name;
 unless ($tarchiveInfo{'DateAcquired'} && $subjectIDsref->{'CandID'}) {
     ### if something went wrong and there is no acq date or CandID
     $final_logfile .= '_'.$temp[$#temp];
