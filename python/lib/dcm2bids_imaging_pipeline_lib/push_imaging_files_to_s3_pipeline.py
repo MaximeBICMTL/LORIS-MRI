@@ -98,8 +98,8 @@ class PushImagingFilesToS3Pipeline(BasePipeline):
 
         for file in self.dicom_archive.mri_files:
             # Get the raw path of that file, without converting it to a Python path object.
-            raw_path: str = inspect(file).attrs.path.loaded_value
-            if raw_path.startswith('s3://'):
+            raw_path: str = str(inspect(file).attrs.path.loaded_value)
+            if raw_path.startswith('s3:/'):
                 # skip since file already pushed to S3
                 continue
             self.files_to_push_list.append({
@@ -271,6 +271,12 @@ class PushImagingFilesToS3Pipeline(BasePipeline):
 
         # remove empty folders from file system
         print("Cleaning up empty folders")
-        remove_empty_directories(self.data_dir / 'assembly_bids' / f'sub-{self.session.candidate.cand_id}')
-        remove_empty_directories(self.data_dir / 'pic' / str(self.session.candidate.cand_id))
-        remove_empty_directories(self.data_dir / 'trashbin')
+        assembly_dir = self.data_dir / 'assembly_bids' / f'sub-{self.session.candidate.cand_id}'
+        pic_dir = self.data_dir / 'pic' / str(self.session.candidate.cand_id)
+        trashbin_dir = self.data_dir / 'trashbin'
+        if assembly_dir.exists():
+            remove_empty_directories(assembly_dir)
+        if pic_dir.exists():
+            remove_empty_directories(pic_dir)
+        if trashbin_dir.exists():
+            remove_empty_directories(trashbin_dir)
