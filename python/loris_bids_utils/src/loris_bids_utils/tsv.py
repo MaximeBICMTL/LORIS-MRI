@@ -58,10 +58,13 @@ class BidsTsvFile(Generic[T]):
 
         return fields
 
-    def write(self, path: Path):
+    def write(self, path: Path | None = None):
         """
-        Write the TSV file to a file at the given path, creating it if necessary.
+        Write the TSV file at the given path. If the path is not provided, the path of this file is
+        used, overwriting existing data.
         """
+
+        path = path if path is not None else self.path
 
         fields = self.get_field_names()
 

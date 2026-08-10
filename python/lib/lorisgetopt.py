@@ -12,7 +12,7 @@ from lib.make_env import make_env
 
 
 class LorisGetOpt:
-    # ruff: noqa
+    # ruff:ignore[doc-line-too-long]
     """
     This class will handle GetOpt functions for scripts to be run.
 

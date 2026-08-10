@@ -3,15 +3,15 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from lib.db.models.physio_task_event_hed import DbPhysioTaskEventHed
-from lib.db.models.physio_task_event_opt import DbPhysioTaskEventOpt
-from lib.db.models.physio_task_event import DbPhysioTaskEvent
-from lib.db.queries.hed_schema_node import get_all_hed_schema_nodes
 from lib.db.models.bids_event_dataset_mapping import DbBidsEventDatasetMapping
 from lib.db.models.bids_event_file_mapping import DbBidsEventFileMapping
 from lib.db.models.physio_event_file import DbPhysioEventFile
 from lib.db.models.physio_file import DbPhysioFile
+from lib.db.models.physio_task_event import DbPhysioTaskEvent
+from lib.db.models.physio_task_event_hed import DbPhysioTaskEventHed
+from lib.db.models.physio_task_event_opt import DbPhysioTaskEventOpt
 from lib.db.models.project import DbProject
+from lib.db.queries.hed_schema_node import get_all_hed_schema_nodes
 from lib.env import Env
 from lib.physio.hed import TagGroupMember, build_hed_tag_groups
 
@@ -19,7 +19,8 @@ from lib.physio.hed import TagGroupMember, build_hed_tag_groups
 @dataclass
 class EventDictFileSource:
     """
-    Class representing whether an event dictionary file is dataset-wide or comes from a specific acquisition.
+    Class representing whether an event dictionary file is dataset-wide or comes from a specific
+    acquisition.
     """
 
     project: DbProject
@@ -171,7 +172,8 @@ def parse_and_insert_event_dict(
 
     for event_name, event in event_dict.items():
         tag_dict[event_name] = {}
-        # TODO: Commented fields below currently not supported # ruff: noqa
+        # ruff:ignore[doc-line-too-long]
+        # TODO: Commented fields below currently not supported
         # description = event_metadata[parameter]['Description'] \
         #     if 'Description' in event_metadata[parameter] \
         #     else None
@@ -182,6 +184,7 @@ def parse_and_insert_event_dict(
             # value_hed = None
         else:
             is_categorical = 'N'
+            # ruff:ignore[doc-line-too-long]
             # value_hed = event_metadata[parameter]['HED'] if 'HED' in event_metadata[parameter] else None
 
         if is_categorical == 'Y':

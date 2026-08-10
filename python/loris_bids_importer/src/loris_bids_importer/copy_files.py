@@ -7,7 +7,7 @@ from lib.db.models.session import DbSession
 from lib.env import Env
 from loris_bids_utils.files.dataset_description import BidsDatasetDescriptionJsonFile
 from loris_bids_utils.files.participants import BidsParticipantsTsvFile
-from loris_bids_utils.files.scans import BidsScansTsvFile
+from loris_bids_utils.files.scans import BidsScansTsvFile, BidsScanTsvRow
 
 from loris_bids_importer.env import BidsImportEnv
 
@@ -175,18 +175,20 @@ def copy_bids_participants_file(
     participants_file.write(participants_path)
 
 
-def copy_bids_scans_file(import_env: BidsImportEnv, scans_file: BidsScansTsvFile, loris_scans_path: Path):
+def add_bids_scan_row(import_env: BidsImportEnv, scan_row: BidsScanTsvRow, loris_scans_path: Path):
     """
-    Copy some `scans.tsv` rows into a LORIS `scans.tsv` file, creating it if necessary.
+    Add a BIDS `scans.tsv` row into a LORIS `scans.tsv` file, creating it if necessary.
     """
 
-    # Do not copy the file in no-copy mode.
+    # Do not copy the row in no-copy mode.
     if import_env.loris_bids_path is None:
         return
 
     scans_path = import_env.data_dir_path / loris_scans_path
-    if scans_path.exists():
-        scans_file.merge(BidsScansTsvFile(scans_path))
 
-    scans_path.parent.mkdir(parents=True, exist_ok=True)
-    scans_file.write(scans_path)
+    # Create the LORIS scans.tsv file if it does not exist yet.
+    scans_path.touch(exist_ok=True)
+
+    scans_file = BidsScansTsvFile(scans_path)
+    scans_file.set_row(scan_row)
+    scans_file.write()

@@ -4,8 +4,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.project as db_project
 import lib.db.models.site as db_site
-import lib.db.models.user_project  # type: ignore  # noqa: F401
-import lib.db.models.user_site  # type: ignore  # noqa: F401
+import lib.db.models.user_project  # type: ignore  # ruff:ignore[unused-import]
+import lib.db.models.user_site  # type: ignore  # ruff:ignore[unused-import]
 from lib.db.base import Base
 from lib.db.decorators.int_bool import IntBool
 from lib.db.decorators.y_n_bool import YNBool

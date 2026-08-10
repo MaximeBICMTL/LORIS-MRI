@@ -1,10 +1,9 @@
 
 from dataclasses import dataclass
 from functools import cached_property
-from pathlib import Path
 
 from bids.layout import BIDSFile
-from loris_utils.path import remove_path_extension
+from loris_utils.path import remove_path_extension, replace_path_extension
 
 from loris_bids_utils.info import BidsAcquisitionInfo
 from loris_bids_utils.mri.acquisition import MriAcquisition
@@ -29,17 +28,20 @@ class BidsMriDataTypeReader(BidsDataTypeReader):
         for pybids_file in pybids_files:
             nifti_path = get_pybids_file_path(pybids_file)
 
+            sidecar_path = replace_path_extension(nifti_path, 'json')
+            if not sidecar_path.exists():
+                sidecar_path = None
+
+            bval_path = replace_path_extension(nifti_path, 'bval')
+            if not bval_path.exists():
+                bval_path = None
+
+            bvec_path = replace_path_extension(nifti_path, 'bvec')
+            if not bvec_path.exists():
+                bvec_path = None
+
             # Get all associated files
             associations: list[BIDSFile] = pybids_file.get_associations()  # type: ignore
-
-            # Find associated files using predicates
-            sidecar_path = find_pybids_file_path(associations, lambda file: file.entities.get('extension') == '.json')
-
-            pybids_bval_path = pybids_layout.get_nearest(pybids_file, extension='.bval')  # type: ignore
-            bval_path = Path(pybids_bval_path) if pybids_bval_path is not None else None  # type: ignore
-
-            pybids_bvec_path = pybids_layout.get_nearest(pybids_file, extension='.bvec')  # type: ignore
-            bvec_path = Path(pybids_bvec_path) if pybids_bvec_path is not None else None  # type: ignore
 
             events_path = find_pybids_file_path(
                 associations,

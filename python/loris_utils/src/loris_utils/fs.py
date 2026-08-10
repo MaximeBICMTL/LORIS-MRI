@@ -29,7 +29,7 @@ def iter_all_dir_files(dir_path: Path) -> Iterator[Path]:
 
     for file_path in dir_path.rglob('*'):
         if file_path.is_file():
-            yield file_path
+            yield file_path.relative_to(dir_path)
 
 
 def is_directory_empty(dir_path: Path) -> bool:

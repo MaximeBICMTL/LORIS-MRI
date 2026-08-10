@@ -101,8 +101,7 @@ All the deletions and modifications performed in the database are done as part o
 all succeed or a rollback is performed and the database is not modified in any way. The ID of the upload to delete
 is specified via option C<-uploadID>. More than one upload can be deleted if they all have the same C<TarchiveID>
 in table C<mri_upload>: option C<-uploadID> can take as argument a comma-separated list of upload IDs for this case.
-If an upload that is deleted is the only one that was associated to a given session, the script will set the C<Scan_done>
-value for that session to 'N'. If option C<-form> is used, the C<mri_parameter_form> and its associated C<flag> record
+If option C<-form> is used, the C<mri_parameter_form> and its associated C<flag> record
 are also deleted, for each deleted upload. If option C<-protocol> is used and if there is a record in table
 C<mri_processing_protocol> that is tied only to the deleted upload(s), then that record is also deleted.
 
@@ -1710,8 +1709,7 @@ This method deletes all information in the database associated to the given uplo
 More specifically, it deletes records from tables C<notification_spool>, C<tarchive_files>, C<tarchive_series>
 C<files_intermediary>, C<parameter_file>, C<files>, C<mri_protocol_violated_scans>, C<mri_violations_log>
 C<MRICandidateErrors>, C<mri_upload>, C<tarchive>, C<mri_processing_protocol> and C<mri_parameter_form>
-(the later is done only if requested). It will also set the C<Scan_done> value of the scan's session to 'N' for
-each upload that is the last upload tied to that session. All the delete/update operations are done inside a single
+(the later is done only if requested). All the delete/update operations are done inside a single
 transaction so either they all succeed or they all fail (and a rollback is performed).
 
 INPUTS:
@@ -1802,8 +1800,6 @@ sub deleteUploadsInDatabase {
         $nbRecordsDeleted += &deleteTableData($dbh, 'tarchive', 'TarchiveID', [$tarchiveID], $tmpSQLFile, $optionsRef) if defined $tarchiveID;
     }
 
-    &updateSessionTable($dbh, $filesRef->{'mri_upload'}, $tmpSQLFile) unless @$scanTypesToDeleteRef || $optionsRef->{'BASENAME'} ne '';
-
     $dbh->commit;
 
     # If the SQL restore file should be produced
@@ -1856,54 +1852,6 @@ sub gzipBackupFile {
 
 =pod
 
-=head3 updateSessionTable($dbh, $mriUploadsRef, $tmpSQLFile)
-
-Sets to C<N> the C<Scan_done> column of all C<sessions> in the database that do not have an associated upload
-after the script has deleted those whose IDs are passed on the command line. The script also adds an SQL statement
-in the SQL file whose path is passed as argument to restore the state that the C<session> table had before the deletions.
-
-INPUTS:
-   - $dbh       : database handle.
-   - $mriUploadsRef: reference on an array of hashes containing the uploads to delete. Accessed like this:
-                 C<< $mriUploadsRef->[0]->{'TarchiveID'} >>(this would return the C<TarchiveID> of the first C<mri_upload>
-                 in the array. The properties stored for each hash are: C<UploadID>, C<TarchiveID>, C<FullPath>
-                 C<Inserting>, C<InsertionComplete> and C<SessionID>.
-   - $tmpSQLFile: path of the SQL file that contains the SQL statements used to restore the deleted records.
-
-=cut
-sub updateSessionTable {
-    my($dbh, $mriUploadsRef, $tmpSQLFile) = @_;
-
-    # If any of the uploads to delete is the last upload that was part of the
-    # session associated to it, then set the session's 'Scan_done' flag
-    # to 'N'.
-    my @sessionIDs = map { $_->{'SessionID'} } @$mriUploadsRef;
-    @sessionIDs = grep(defined $_, @sessionIDs);
-
-    return if !@sessionIDs;
-
-    my $query = "UPDATE session s SET Scan_done = 'N'"
-              . " WHERE s.ID IN ("
-              . join(',', ('?') x @sessionIDs)
-              . ") AND (SELECT COUNT(*) FROM mri_upload m WHERE m.SessionID=s.ID) = 0";
-    $dbh->do($query, undef, @sessionIDs );
-
-    if($tmpSQLFile) {
-        # Write an SQL statement to restore the 'Scan_done' column of the deleted uploads
-        # to their appropriate values. This statement needs to be after the statement that
-        # restores table mri_upload (at the end of the file is good enough).
-        open(SQL, ">>$tmpSQLFile") or die "Cannot append text to file $tmpSQLFile: $!. Aborting.\n";
-        print SQL "\n\n";
-        print SQL "UPDATE session s SET Scan_done = 'Y'"
-                . " WHERE s.ID IN ("
-                . join(',', @sessionIDs)
-                . ") AND (SELECT COUNT(*) FROM mri_upload m WHERE m.SessionID=s.ID) > 0;\n";
-        close(SQL);
-    }
-}
-
-=pod
-
 =head3 updateFilesIntermediaryTable($dbh, $filesRef, $tmpSQLFile)
 
 Sets the C<TarchiveSource> and C<SourceFileID> columns of all the defaced files to C<$tarchiveID> and C<NULL>
@@ -1929,12 +1877,14 @@ sub updateFilesIntermediaryTable {
                   . ")";
         $dbh->do($query, undef, $tarchiveID, keys %defacedFiles);
 
-        open(SQL, ">>$tmpSQLFile") or die "Cannot append text to file $tmpSQLFile: $!. Aborting.\n";
-        print SQL "\n\n";
-        while(my($fileID, $sourceFileID) = each %defacedFiles) {
-            print SQL "UPDATE files SET TarchiveSource = NULL, SourceFileID = $sourceFileID WHERE FileID = $fileID;\n";
+        if (defined $tmpSQLFile) {
+            open(SQL, ">>$tmpSQLFile") or die "Cannot append text to file $tmpSQLFile: $!. Aborting.\n";
+            print SQL "\n\n";
+            while(my($fileID, $sourceFileID) = each %defacedFiles) {
+                print SQL "UPDATE files SET TarchiveSource = NULL, SourceFileID = $sourceFileID WHERE FileID = $fileID;\n";
+            }
+            close(SQL);
         }
-        close(SQL);
     }
 }
 
@@ -1966,7 +1916,8 @@ sub deleteMriParameterForm {
     my $query = "SELECT f.CommentID FROM flag f "
               . "JOIN session s ON (s.ID=f.SessionID) "
               . "JOIN mri_upload mu ON (s.ID=mu.SessionID) "
-              . "WHERE f.Test_name='mri_parameter_form' "
+              . "JOIN test_names tn ON tn.ID=f.TestID "
+              . "WHERE tn.Test_name='mri_parameter_form' "
               . "AND mu.UploadID IN ( "
               . join(',', ('?') x @uploadIDs)
               . ") ";

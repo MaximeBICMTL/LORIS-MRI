@@ -11,14 +11,13 @@ from lib.imaging_lib.file_parameter import register_mri_file_parameters
 from lib.imaging_lib.nifti import add_nifti_spatial_file_parameters
 from lib.imaging_lib.nifti_pic import create_nifti_preview_picture
 from lib.imaging_lib.scan_type import create_mri_scan_type
-from lib.logging import log
 from loris_bids_utils.info import BidsAcquisitionInfo
 from loris_bids_utils.mri.acquisition import MriAcquisition
 from loris_bids_utils.mri.reader import BidsMriDataTypeReader
 from loris_utils.crypto import compute_file_blake2b_hash
 from loris_utils.error import group_errors_tuple
 
-from loris_bids_importer.acquisitions import import_bids_acquisitions
+from loris_bids_importer.acquisitions import BidsImportFileResult, BidsImportFileStatus, import_bids_acquisitions
 from loris_bids_importer.copy_files import copy_loris_bids_file, get_loris_bids_file_path
 from loris_bids_importer.env import BidsImportEnv
 from loris_bids_importer.file_type import get_check_bids_imaging_file_type_from_extension
@@ -55,6 +54,7 @@ def import_bids_mri_data_type(
     import_bids_acquisitions(
         env,
         import_env,
+        session,
         data_type.acquisitions,
         lambda acquisition, bids_info: import_bids_mri_acquisition(
             env,
@@ -72,7 +72,7 @@ def import_bids_mri_acquisition(
     session: DbSession,
     acquisition: MriAcquisition,
     bids_info: BidsAcquisitionInfo,
-):
+) -> BidsImportFileResult:
     """
     Import a BIDS NIfTI file and its associated files in LORIS.
     """
@@ -87,9 +87,7 @@ def import_bids_mri_acquisition(
 
     loris_file = try_get_file_with_path(env.db, loris_file_path)
     if loris_file is not None:
-        import_env.ignored_acquisitions_count += 1
-        log(env, f"File '{loris_file_path}' is already registered in LORIS. Skipping.")
-        return
+        return BidsImportFileResult(BidsImportFileStatus.IGNORE, loris_file_path)
 
     # Get information about the file.
 
@@ -139,7 +137,7 @@ def import_bids_mri_acquisition(
     file_parameters['file_blake2b_hash'] = file_hash
 
     if bids_info.scans_file is not None and bids_info.scan_row is not None:
-        add_bids_scans_file_parameters(bids_info.scans_file, bids_info.scan_row, file_parameters)
+        add_bids_scans_file_parameters(import_env, session, bids_info.scans_file, bids_info.scan_row, file_parameters)
 
     for aux_file_type, aux_file_path in aux_file_paths:
         aux_file_hash = compute_file_blake2b_hash(aux_file_path)
@@ -177,6 +175,8 @@ def import_bids_mri_acquisition(
     # Create and register the file picture.
 
     create_nifti_preview_picture(env, file)
+
+    return BidsImportFileResult(BidsImportFileStatus.SUCCESS, loris_file_path)
 
 
 def get_check_bids_nifti_file_hash(env: Env, acquisition: MriAcquisition) -> str:
