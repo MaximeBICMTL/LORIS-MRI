@@ -9,7 +9,9 @@ from pathlib import Path
 from loris_bids_importer.file_type import get_check_bids_imaging_file_type_from_extension
 from loris_bids_importer.mri.sidecar import add_bids_mri_sidecar_file_parameters, get_bids_mri_sidecar_session_info
 from loris_bids_utils.mri.sidecar import BidsMriSidecarJsonFile
+from loris_bids_utils.path import build_bids_file_name, build_bids_modality_path
 from loris_utils.crypto import compute_file_blake2b_hash, compute_file_md5_hash
+from loris_utils.path import get_path_extension
 
 import lib.exitcode
 from lib.db.queries.dicom_archive import try_get_dicom_archive_series_with_series_uid_echo_time
@@ -46,7 +48,7 @@ class NiftiInsertionPipeline(BasePipeline):
          :type script_name: str
         """
         super().__init__(loris_getopt_obj, script_name)
-        self.nifti_path = self.options_dict["nifti_path"]["value"]
+        self.nifti_path = Path(self.options_dict["nifti_path"]["value"])
         self.nifti_s3_url = self.options_dict["nifti_path"]["s3_url"] \
             if 's3_url' in self.options_dict["nifti_path"].keys() else None
         self.nifti_blake2 = compute_file_blake2b_hash(self.nifti_path)
@@ -243,7 +245,7 @@ class NiftiInsertionPipeline(BasePipeline):
                 self.dicom_archive.patient_name,
                 self.dicom_archive.id,
                 self.json_file_dict,
-                self.nifti_path,
+                str(self.nifti_path),
                 str(error),
             )
 
@@ -293,7 +295,7 @@ class NiftiInsertionPipeline(BasePipeline):
                 nifti_pname,
                 self.dicom_archive.id,
                 self.json_file_dict,
-                self.nifti_path,
+                str(self.nifti_path),
                 err_msg
             )
 
@@ -365,7 +367,6 @@ class NiftiInsertionPipeline(BasePipeline):
          :rtype: int
         """
 
-        nifti_name = os.path.basename(self.nifti_path)
         scan_param = self.json_file_dict
 
         # get the list of lines in the mri_protocol table that apply to the given scan based on the
@@ -379,7 +380,7 @@ class NiftiInsertionPipeline(BasePipeline):
         )
 
         protocol_info = self.imaging_obj.get_acquisition_protocol_info(
-            protocols_list, nifti_name, scan_param, self.loris_scan_type
+            protocols_list, self.nifti_path.name, scan_param, self.loris_scan_type
         )
 
         log_verbose(self.env, protocol_info['error_message'])
@@ -448,8 +449,6 @@ class NiftiInsertionPipeline(BasePipeline):
                 file_bids_entities_dict[key] = value
 
         # determine where the file should go
-        bids_cand_id = 'sub-' + str(self.session.candidate.cand_id)
-        bids_visit = 'ses-' + self.session.visit_label
         bids_subfolder = self.bids_categories_dict['BIDSCategoryName']
 
         # determine NIfTI file name
@@ -459,7 +458,14 @@ class NiftiInsertionPipeline(BasePipeline):
             file_bids_entities_dict['run'] += 1
             new_nifti_name = self._construct_nifti_filename(file_bids_entities_dict)
 
-        return os.path.join('assembly_bids', bids_cand_id, bids_visit, bids_subfolder, new_nifti_name)
+        relative_path = build_bids_modality_path(
+            str(self.session.candidate.cand_id),
+            self.session.visit_label,
+            bids_subfolder,
+            new_nifti_name,
+        )
+
+        return os.path.join('assembly_bids', relative_path)
 
     def _construct_nifti_filename(self, file_bids_entities_dict):
         """
@@ -474,44 +480,19 @@ class NiftiInsertionPipeline(BasePipeline):
          :rtype: str
         """
 
-        # this list defined the order in which BIDS entities should appear in the filename
-        bids_entity_order = (
-            'sub',       # Subject
-            'ses',       # Session
-            'task',      # Task
-            'acq',       # Acquisition
-            'ce',        # Contrast Enhancing Agent
-            'rec',       # Reconstruction
-            'dir',       # Phase Encoding Direction
-            'run',       # Run
-            'mod',       # Corresponding Modality
-            'echo',      # Echo
-            'flip',      # Flip Angle
-            'inv',       # Inversion Time
-            'mt',        # Magnetization Transfer
-            'part',      # Part
-            'recording'  # Recording
-        )
+        suffix = self.bids_categories_dict['BIDSScanType']
+        entities = dict(file_bids_entities_dict)
+        if suffix == 'magnitude' and 'echo' in entities:
+            suffix = f"magnitude{entities.pop('echo')}"
 
-        nifti_filename = ''
-        for entity in bids_entity_order:
-            if entity == 'sub':
-                nifti_filename += f"{entity}-{file_bids_entities_dict[entity]}"
-            elif entity == "echo" and self.bids_categories_dict['BIDSScanType'] == 'magnitude':
-                self.bids_categories_dict['BIDSScanType'] = f"magnitude{file_bids_entities_dict[entity]}"
-            else:
-                if entity in file_bids_entities_dict.keys():
-                    nifti_filename += f"_{entity}-{file_bids_entities_dict[entity]}"
+        nifti_ext = get_path_extension(self.nifti_path)
+        if nifti_ext is None:
+            log_error_exit(
+                self.env,
+                f"Missing NIfTI extension in file name: {self.nifti_path}"
+            )
 
-        # add BIDS scan type to the NIfTI filename
-        nifti_filename += f"_{self.bids_categories_dict['BIDSScanType']}"
-
-        # determine NIfTI file extension and append it to filename
-        curr_nifti_path = self.nifti_path
-        nifti_ext = re.search(r"\.nii(\.gz)?$", curr_nifti_path).group()
-        nifti_filename += nifti_ext
-
-        return nifti_filename
+        return build_bids_file_name(entities, suffix, nifti_ext)
 
     def _move_to_trashbin(self):
         """
