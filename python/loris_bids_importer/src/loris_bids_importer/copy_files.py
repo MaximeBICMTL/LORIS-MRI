@@ -8,6 +8,7 @@ from lib.env import Env
 from loris_bids_utils.files.dataset_description import BidsDatasetDescriptionJsonFile
 from loris_bids_utils.files.participants import BidsParticipantsTsvFile
 from loris_bids_utils.files.scans import BidsScansTsvFile, BidsScanTsvRow
+from loris_bids_utils.path import build_bids_modality_path, build_bids_session_path
 
 from loris_bids_importer.env import BidsImportEnv
 
@@ -68,12 +69,11 @@ def get_loris_bids_file_path(
     # information.
     loris_file_name = get_loris_bids_file_name(file_path.name, session)
 
-    return (
-        import_env.loris_bids_path
-        / f'sub-{session.candidate.psc_id}'
-        / f'ses-{session.visit_label}'
-        / data_type
-        / loris_file_name
+    return import_env.loris_bids_path / build_bids_modality_path(
+        session.candidate.psc_id,
+        session.visit_label,
+        data_type,
+        loris_file_name,
     )
 
 
@@ -101,11 +101,11 @@ def get_loris_scans_path(import_env: BidsImportEnv, scans_file: BidsScansTsvFile
         return scans_file.path.relative_to(import_env.data_dir_path)
 
     loris_file_name = get_loris_bids_file_name(scans_file.path.name, session)
-    return (
-        import_env.loris_bids_path
-        / f'sub-{session.candidate.psc_id}'
-        / f'ses-{session.visit_label}'
-        / loris_file_name
+
+    return import_env.loris_bids_path / build_bids_session_path(
+        session.candidate.psc_id,
+        session.visit_label,
+        loris_file_name,
     )
 
 
