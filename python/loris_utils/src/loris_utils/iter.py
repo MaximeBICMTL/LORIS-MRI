@@ -85,3 +85,13 @@ def map_non_none(value: T | None, function: Callable[[T], U]) -> U | None:
     """
 
     return function(value) if value is not None else value
+
+
+def filter_non_none(iterable: Iterable[T | None]) -> Iterator[T]:
+    """
+    Filter the `None` elements out of an iterator.
+    """
+
+    for element in iterable:
+        if element is not None:
+            yield element
