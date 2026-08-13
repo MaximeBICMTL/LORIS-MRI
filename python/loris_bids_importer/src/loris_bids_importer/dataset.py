@@ -87,11 +87,12 @@ def get_or_create_loris_bids_dataset(env: Env, bids_path: Path) -> DbBidsDataset
 
     bids_dataset = try_get_bids_dataset_with_path(env.db, bids_path)
     if bids_dataset is not None:
+        bids_dataset.update_time = datetime.now()
+        env.db.flush()
         return bids_dataset
 
     bids_dataset = DbBidsDataset(
-        path        = bids_path,
-        insert_time = datetime.now(),
+        path = bids_path
     )
 
     env.db.add(bids_dataset)
@@ -130,7 +131,6 @@ def get_or_create_loris_bids_file(
             dataset_id    = importer.loris_bids_dataset.id,
             path          = bids_file_path,
             source_path   = source_bids_file_path,
-            insert_time   = datetime.now(),
             blake2b_hash  = blake2b_hash,
             derivative    = derivative,
         )

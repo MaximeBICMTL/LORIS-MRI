@@ -28,3 +28,8 @@ class DbBidsDataset(Base):
     """
     The time at which this BIDS dataset was created in LORIS.
     """
+
+    update_time: Mapped[datetime] = mapped_column('UpdateTime', default=datetime.now)
+    """
+    The last time at which this BIDS dataset was updated in LORIS.
+    """
