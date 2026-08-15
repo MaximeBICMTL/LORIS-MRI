@@ -18,6 +18,7 @@ class DbPhysioTaskEvent(Base):
     insert_time    : Mapped[datetime]       = mapped_column('InsertTime', default=datetime.now)
     onset          : Mapped[Decimal]        = mapped_column('Onset')
     duration       : Mapped[Decimal]        = mapped_column('Duration')
+    channel        : Mapped[str | None]     = mapped_column('Channel')
     event_code     : Mapped[int | None]     = mapped_column('EventCode')
     event_value    : Mapped[str | None]     = mapped_column('EventValue')
     event_sample   : Mapped[int | None]     = mapped_column('EventSample')

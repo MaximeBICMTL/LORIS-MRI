@@ -40,7 +40,6 @@ class DbUser(Base):
     active                   : Mapped[bool]         = mapped_column('Active', YNBool, default=True)
     password_hash            : Mapped[str | None]   = mapped_column('Password_hash')
     password_change_required : Mapped[bool]         = mapped_column('PasswordChangeRequired', IntBool, default=False)
-    totp_secret              : Mapped[bytes | None] = mapped_column('TOTPSecret')
     pending_approval         : Mapped[bool | None]  = mapped_column('Pending_approval', YNBool, default=True)
     doc_repo_notifications   : Mapped[bool | None]  = mapped_column('Doc_Repo_Notifications', YNBool, default=False)
     language_preference      : Mapped[int | None]   = mapped_column('language_preference')
