@@ -258,18 +258,10 @@ def insert_physio_task_event(
         duration       = duration,
         event_code     = event_code,
         event_value    = event_value,
-        # C-BIG OVERRIDE START
-        # Remove when updating to LORIS 29
-        event_sample   = Decimal(event_sample) if event_sample is not None else None,
-        # C-BIG OVERRIDE END
+        event_sample   = event_sample,
         event_type     = event_type,
         trial_type     = trial_type,
-        # C-BIG OVERRIDE START
-        # Remove when updating to LORIS 29
-        # Note that the field is (incorrectly) a `time` object before LORIS 29, but SQLAlchemy
-        # should accept integers.
-        response_time  = int(response_time) if response_time is not None else None,
-        # C-BIG OVERRIDE END
+        response_time  = response_time,
     )
 
     env.db.add(event_task_file)

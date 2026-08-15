@@ -61,7 +61,10 @@ def test_ephys_browser_session_access(
         permissions=[] if permission is None else [permissions[permission]],
     )
 
-    session = DbSession(candidate_id=1, visit_label='V1', project=project, site=site)
+    # C-BIG OVERRIDE START
+    # Use the current C-BIG candidate key until the session schema is upgraded.
+    session = DbSession(cand_id=1, visit_label='V1', project=project, site=site)
+    # C-BIG OVERRIDE END
 
     env.db.add_all([module, view_all, view_own, user])
 

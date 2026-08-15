@@ -12,6 +12,7 @@ class DbPermission(Base):
     id          : Mapped[int]        = mapped_column('permID', primary_key=True)
     code        : Mapped[str]        = mapped_column('code', default='', unique=True)
     description : Mapped[str]        = mapped_column('description', default='')
+    action      : Mapped[str | None]  = mapped_column('action')
     module_id   : Mapped[int | None] = mapped_column('moduleID', ForeignKey('modules.ID'))
     category_id : Mapped[int]        = mapped_column('categoryID', ForeignKey('permissions_category.ID'), default=2)
 
