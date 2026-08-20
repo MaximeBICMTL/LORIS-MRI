@@ -1,9 +1,9 @@
-# Test plan for `run_dicom_archive_validation.py`
+# Test plan for `validate-dicom-archive`
 
 ## Manual tests
 
 - If not already done, source the environment file: `source /opt/Loris-MRI/bin/mri/environment`
-- run `run_dicom_archive_validation.py -h`
+- run `validate-dicom-archive -h`
      => should print the help of the script. Make sure the help documentation is up-to-date.
 - Bonus points: verify that the automated tests are still implemented
 

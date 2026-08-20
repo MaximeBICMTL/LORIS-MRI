@@ -1,9 +1,9 @@
-# Test plan for `run_nifti_insertion.py`
+# Test plan for `insert-nifti`
 
 ## Manual tests
 
 - If not already done, source the environment file: `source /opt/Loris-MRI/bin/mri/environment`
-- run `run_nifti_insertion.py -h`
+- run `insert-nifti -h`
      => should print the help of the script. Make sure the help documentation is up-to-date.
 - Bonus points: verify that the automated tests are still implemented
 

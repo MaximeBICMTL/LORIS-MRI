@@ -6,8 +6,9 @@ import sys
 from pathlib import Path
 
 import lib.exitcode
-from lib.dcm2bids_imaging_pipeline_lib.base_pipeline import BasePipeline
 from lib.logging import log_error_exit, log_verbose
+
+from loris_dicom_to_bids_converter.base_pipeline import BasePipeline
 
 
 class DicomArchiveLoaderPipeline(BasePipeline):
@@ -81,7 +82,7 @@ class DicomArchiveLoaderPipeline(BasePipeline):
             ))
 
         # ------------------------------------------------------------------------------------------
-        # Loop through NIfTI files and call run_nifti_insertion.pl
+        # Loop through NIfTI files and call insert-nifti
         # ------------------------------------------------------------------------------------------
         self.inserted_file_count = 0
         self._loop_through_nifti_files_and_insert()
@@ -102,14 +103,14 @@ class DicomArchiveLoaderPipeline(BasePipeline):
 
     def _run_dicom_archive_validation_pipeline(self):
         """
-        Runs the script `run_dicom_archive_validation.py` to ensure the DICOM archive to process is
+        Runs the script `validate-dicom-archive` to ensure the DICOM archive to process is
         valid. Once the script is done running, check in the database that the mri_upload table was
         properly updated. If not, self.check_if_tarchive_validated_in_db() will exit and log the
         error in the notification spool table and log files.
         """
 
         validation_command = [
-            "run_dicom_archive_validation.py",
+            "validate-dicom-archive",
             "-t", self.tarchive_path,
             "-u", str(self.mri_upload.id)
         ]
@@ -122,10 +123,10 @@ class DicomArchiveLoaderPipeline(BasePipeline):
         validation_process.communicate()
         if validation_process.returncode == 0:
             log_verbose(self.env, (
-                f"run_dicom_archive_validation.py successfully executed for UploadID {self.mri_upload.id} "
+                f"validate-dicom-archive successfully executed for UploadID {self.mri_upload.id} "
                 f"and ArchiveLocation {self.tarchive_path}"
             ))
-            # reset mri_upload to Inserting as run_dicom_archive_validation.py will set
+            # reset mri_upload to Inserting as validate-dicom-archive will set
             # Inserting=False after execution
             self.mri_upload.inserting = True
             self.env.db.commit()
@@ -133,7 +134,7 @@ class DicomArchiveLoaderPipeline(BasePipeline):
             log_error_exit(
                 self.env,
                 (
-                    f"run_dicom_archive_validation.py failed validation for UploadID {self.mri_upload.id}"
+                    f"validate-dicom-archive failed validation for UploadID {self.mri_upload.id}"
                     f"and ArchiveLocation {self.tarchive_path}. Exit code was {validation_process.returncode}."
                 ),
                 lib.exitcode.INVALID_DICOM,
@@ -274,7 +275,7 @@ class DicomArchiveLoaderPipeline(BasePipeline):
 
     def _loop_through_nifti_files_and_insert(self):
         """
-        Loop through the list of NIfTI files to process through run_nifti_insertion.py for insertion
+        Loop through the list of NIfTI files to process through insert-nifti for insertion
         into the imaging tables of the database.
         """
 
@@ -290,7 +291,7 @@ class DicomArchiveLoaderPipeline(BasePipeline):
 
     def _run_nifti_insertion(self, nifti_file_path, json_file_path, bval_file_path=None, bvec_file_path=None):
         """
-        Executes `run_nifti_insertion.py` on the NIfTI file to process.
+        Executes `insert-nifti` on the NIfTI file to process.
 
         :param nifti_file_path: path of the NIfTI file to insert
          :type nifti_file_path: str
@@ -303,7 +304,7 @@ class DicomArchiveLoaderPipeline(BasePipeline):
         """
 
         nifti_insertion_command = [
-            "run_nifti_insertion.py",
+            "insert-nifti",
             "-u", str(self.mri_upload.id),
             "-n", nifti_file_path,
             "-j", json_file_path,
@@ -322,16 +323,16 @@ class DicomArchiveLoaderPipeline(BasePipeline):
         stdout, _ = insertion_process.communicate()
 
         if insertion_process.returncode == 0:
-            log_verbose(self.env, f"run_nifti_insertion.py successfully executed for file {nifti_file_path}")
+            log_verbose(self.env, f"insert-nifti successfully executed for file {nifti_file_path}")
             self.inserted_file_count += 1
 
-            # reset mri_upload to Inserting as run_nifti_insertion.py will set Inserting=False after
+            # reset mri_upload to Inserting as insert-nifti will set Inserting=False after
             # execution
             self.mri_upload.inserting = True
             self.env.db.commit()
         else:
             print(stdout)
-            log_verbose(self.env, f"run_nifti_insertion.py failed for file {nifti_file_path}.\n{stdout}")
+            log_verbose(self.env, f"insert-nifti failed for file {nifti_file_path}.\n{stdout}")
 
     def _move_and_update_dicom_archive(self):
         """

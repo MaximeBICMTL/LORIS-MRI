@@ -4,8 +4,9 @@
 
 import os
 
-from lib.dcm2bids_imaging_pipeline_lib.dicom_archive_loader_pipeline import DicomArchiveLoaderPipeline
 from lib.lorisgetopt import LorisGetOpt
+
+from loris_dicom_to_bids_converter.dicom_archive_loader_pipeline import DicomArchiveLoaderPipeline
 
 
 def main():
@@ -19,7 +20,7 @@ def main():
         " JSON sidecar file) into the files table.\n\n"
         # TODO more description on how the script works
 
-        "usage  : run_dicom_archive_loader.py -p <profile> -u <upload_id> ...\n\n"
+        "usage  : convert-dicom-archive-to-bids -p <profile> -u <upload_id> ...\n\n"
 
         "options: \n"
         "\t-p, --profile            : Name of the python database config file in config\n"
@@ -67,7 +68,7 @@ def main():
     DicomArchiveLoaderPipeline(loris_getopt_obj, os.path.basename(__file__[:-3]))
 
 
-def input_error_checking(loris_getopt_obj):
+def input_error_checking(loris_getopt_obj: LorisGetOpt):
 
     # check that only one of tarchive_path, upload_id or force has been provided
     loris_getopt_obj.check_tarchive_path_upload_id_or_force_set()
