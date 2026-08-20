@@ -14,7 +14,7 @@ def test_missing_upload_id_arg():
 
     # Run the script to test
     process = run_integration_script([
-        'run_dicom_archive_validation.py',
+        'validate-dicom-archive',
         '--tarchive_path', VALID_TARCHIVE_PATH,
     ])
 
@@ -36,7 +36,7 @@ def test_missing_tarchive_path_arg():
 
     # Run the script to test
     process = run_integration_script([
-        'run_dicom_archive_validation.py',
+        'validate-dicom-archive',
         '--upload_id', VALID_UPLOAD_ID,
     ])
 
@@ -57,7 +57,7 @@ def test_invalid_arg():
     db = get_integration_database_session()
 
     process = run_integration_script([
-        'run_dicom_archive_validation.py',
+        'validate-dicom-archive',
         '--invalid_arg',
     ])
 
@@ -79,7 +79,7 @@ def test_invalid_tarchive_path_arg():
 
     # Run the script to test
     process = run_integration_script([
-        'run_dicom_archive_validation.py',
+        'validate-dicom-archive',
         '--tarchive_path', INVALID_TARCHIVE_PATH,
         '--upload_id', VALID_UPLOAD_ID,
     ])
@@ -103,7 +103,7 @@ def test_non_existent_upload_id():
 
     # Run the script to test
     process = run_integration_script([
-        'run_dicom_archive_validation.py',
+        'validate-dicom-archive',
         '--tarchive_path', VALID_TARCHIVE_PATH,
         '--upload_id', INVALID_UPLOAD_ID,
     ])
@@ -119,7 +119,7 @@ def test_mixed_up_upload_id_tarchive_path():
 
     # Run the script to test
     process = run_integration_script([
-        'run_dicom_archive_validation.py',
+        'validate-dicom-archive',
         '--tarchive_path', VALID_TARCHIVE_PATH,
         '--upload_id', '126',
     ])
@@ -136,7 +136,7 @@ def test_successful_validation():
 
     # Run the script to test
     process = run_integration_script([
-        'run_dicom_archive_validation.py',
+        'validate-dicom-archive',
         '--tarchive_path', VALID_TARCHIVE_PATH,
         '--upload_id', VALID_UPLOAD_ID,
     ])

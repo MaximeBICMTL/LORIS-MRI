@@ -4,8 +4,9 @@
 
 import os
 
-from lib.dcm2bids_imaging_pipeline_lib.push_imaging_files_to_s3_pipeline import PushImagingFilesToS3Pipeline
 from lib.lorisgetopt import LorisGetOpt
+
+from loris_dicom_to_bids_converter.push_imaging_files_to_s3_pipeline import PushImagingFilesToS3Pipeline
 
 
 def main():
@@ -17,7 +18,7 @@ def main():
         "********************************************************************\n"
         "The program gets all the files associated to an upload ID and push them to an Amazon S3 bucket.\n\n"
 
-        "usage  : run_push_imaging_files_to_s3_pipeline.py -p <profile> -u <upload_id> ...\n\n"
+        "usage  : push-imaging-files-to-s3 -p <profile> -u <upload_id> ...\n\n"
 
         "options: \n"
         "\t-p, --profile            : Name of the python database config file in config\n"

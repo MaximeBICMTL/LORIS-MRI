@@ -4,8 +4,9 @@
 
 import os
 
-from lib.dcm2bids_imaging_pipeline_lib.dicom_validation_pipeline import DicomValidationPipeline
 from lib.lorisgetopt import LorisGetOpt
+
+from loris_dicom_to_bids_converter.dicom_validation_pipeline import DicomValidationPipeline
 
 
 def main():
@@ -23,7 +24,7 @@ def main():
         "\t- Verify the DICOM archive against the checksum stored in the database\n"
         "\t- Update the mri_upload's 'isTarchiveValidated' field if above validations were successful\n\n"
 
-        "usage  : dicom_archive_validation -p <profile> -t <tarchive_path> -u <upload_id>\n\n"
+        "usage  : validate-dicom-archive -p <profile> -t <tarchive_path> -u <upload_id>\n\n"
 
         "options: \n"
         "\t-p, --profile      : Name of the python database config file in config\n"

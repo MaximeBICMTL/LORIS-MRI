@@ -2,12 +2,12 @@ import os
 import re
 import sys
 
+import lib.exitcode
+from lib.logging import log_error_exit
 from loris_utils.fs import remove_empty_directories
 from sqlalchemy import inspect
 
-import lib.exitcode
-from lib.dcm2bids_imaging_pipeline_lib.base_pipeline import BasePipeline
-from lib.logging import log_error_exit
+from loris_dicom_to_bids_converter.base_pipeline import BasePipeline
 
 
 class PushImagingFilesToS3Pipeline(BasePipeline):

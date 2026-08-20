@@ -11,7 +11,7 @@ from tests.util.run_integration_script import run_integration_script
 def test_invalid_arg():
 
     process = run_integration_script([
-        'run_dicom_archive_loader.py',
+        'convert-dicom-archive-to-bids',
         '--invalid_arg',
     ])
 
@@ -27,7 +27,7 @@ def test_non_existent_upload_id():
 
     # Run the script to test
     process = run_integration_script([
-        'run_dicom_archive_loader.py',
+        'convert-dicom-archive-to-bids',
         '--upload_id', invalid_upload_id,
     ])
 
@@ -44,7 +44,7 @@ def test_invalid_tarchive_path_arg():
 
     # Run the script to test
     process = run_integration_script([
-        'run_dicom_archive_loader.py',
+        'convert-dicom-archive-to-bids',
         '--tarchive_path', invalid_tarchive_path,
     ])
 
@@ -65,7 +65,7 @@ def test_successful_run_on_valid_tarchive_path():
 
     # Run the script to test
     process = run_integration_script([
-        'run_dicom_archive_loader.py',
+        'convert-dicom-archive-to-bids',
         '--tarchive_path', '/data/loris/tarchive/DCM_2015-07-07_MTL001_300001_V2_localizer_t1w.tar',
     ])
 
