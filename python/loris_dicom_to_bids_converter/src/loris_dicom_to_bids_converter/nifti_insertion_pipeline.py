@@ -6,6 +6,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+import lib.exitcode
+from lib.db.queries.dicom_archive import try_get_dicom_archive_series_with_series_uid_echo_time
+from lib.db.queries.file import try_get_file_with_hash
+from lib.db.queries.mri_scan_type import try_get_mri_scan_type_with_id, try_get_mri_scan_type_with_name
+from lib.get_session_info import SessionConfigError, get_dicom_archive_session_info
+from lib.imaging_lib.file import register_mri_file
+from lib.imaging_lib.file_parameter import register_mri_file_parameters
+from lib.imaging_lib.nifti import add_nifti_spatial_file_parameters
+from lib.imaging_lib.nifti_pic import create_nifti_preview_picture
+from lib.logging import log_error_exit, log_verbose
 from loris_bids_importer.file_type import get_check_bids_imaging_file_type_from_extension
 from loris_bids_importer.mri.sidecar import add_bids_mri_sidecar_file_parameters, get_bids_mri_sidecar_session_info
 from loris_bids_utils.mri.sidecar import BidsMriSidecarJsonFile
@@ -13,17 +23,7 @@ from loris_bids_utils.path import build_bids_file_name, build_bids_modality_path
 from loris_utils.crypto import compute_file_blake2b_hash, compute_file_md5_hash
 from loris_utils.path import get_path_extension
 
-import lib.exitcode
-from lib.db.queries.dicom_archive import try_get_dicom_archive_series_with_series_uid_echo_time
-from lib.db.queries.file import try_get_file_with_hash
-from lib.db.queries.mri_scan_type import try_get_mri_scan_type_with_id, try_get_mri_scan_type_with_name
-from lib.dcm2bids_imaging_pipeline_lib.base_pipeline import BasePipeline
-from lib.get_session_info import SessionConfigError, get_dicom_archive_session_info
-from lib.imaging_lib.file import register_mri_file
-from lib.imaging_lib.file_parameter import register_mri_file_parameters
-from lib.imaging_lib.nifti import add_nifti_spatial_file_parameters
-from lib.imaging_lib.nifti_pic import create_nifti_preview_picture
-from lib.logging import log_error_exit, log_verbose
+from loris_dicom_to_bids_converter.base_pipeline import BasePipeline
 
 
 class NiftiInsertionPipeline(BasePipeline):
@@ -131,7 +131,7 @@ class NiftiInsertionPipeline(BasePipeline):
                 log_error_exit(
                     self.env,
                     (
-                        f"{self.nifti_path}'s scan type {self.loris_scan_type} provided to run_nifti_insertion.py"
+                        f"{self.nifti_path}'s scan type {self.loris_scan_type} provided to insert-nifti"
                         f" is not a valid scan type in the database."
                     ),
                     lib.exitcode.UNKNOWN_PROTOCOL,
@@ -344,7 +344,7 @@ class NiftiInsertionPipeline(BasePipeline):
                                 f" and EchoTime ({tar_echo_time}) as the one present in the JSON side car file. " \
                                 f" The DICOM archive location containing those DICOM files is " \
                                 f" {self.dicom_archive.path}. Please, rerun " \
-                                f" <run_nifti_insertion.py> with either --upload_id or --tarchive_path option."
+                                f" <insert-nifti> with either --upload_id or --tarchive_path option."
 
         # verify that a file with the same MD5 or blake2b hash has not already been inserted
         md5_match = try_get_file_with_hash(self.env.db, self.nifti_md5)
@@ -687,7 +687,7 @@ class NiftiInsertionPipeline(BasePipeline):
         """
 
         push_to_s3_cmd = [
-            "run_push_imaging_files_to_s3_pipeline.py",
+            "push-imaging-files-to-s3",
             "-u", str(self.mri_upload.id),
         ]
         if self.options_dict["profile"]["value"] is not None:
@@ -701,10 +701,10 @@ class NiftiInsertionPipeline(BasePipeline):
         if s3_process.returncode == 0:
             log_verbose(
                 self.env,
-                f"run_push_imaging_files_to_s3_pipeline.py successfully executed for Upload ID {self.mri_upload.id}"
+                f"push-imaging-files-to-s3 successfully executed for Upload ID {self.mri_upload.id}"
             )
         else:
             log_verbose(
                 self.env,
-                f"run_push_imaging_files_to_s3_pipeline.py failed for Upload ID {self.mri_upload.id}.\n{stdout}"
+                f"push-imaging-files-to-s3 failed for Upload ID {self.mri_upload.id}.\n{stdout}"
             )
