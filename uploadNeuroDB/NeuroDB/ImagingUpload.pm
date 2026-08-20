@@ -536,7 +536,7 @@ sub runTarchiveLoader {
 
 =head3 runPythonArchiveLoader()
 
-This methods will call C<run_dicom_archive_loader.py>
+This method will call C<convert-dicom-archive-to-bids>
 
 RETURNS: 1 on success, 0 on failure
 
@@ -549,12 +549,10 @@ sub runPythonArchiveLoader {
     ## Get config settings using ConfigOB
     # ----------------------------------------------------------------
     my $configOB      = $this->{configOB};
-    my $bin_dirPath   = $configOB->getMriCodePath();
     my $python_config = $configOB->getPythonConfigFile();
 
     my $command = sprintf(
-        "%s/python/scripts/run_dicom_archive_loader.py -p %s -u %s",
-        quotemeta($bin_dirPath),
+        "convert-dicom-archive-to-bids -p %s -u %s",
         $python_config,
         quotemeta($this->{upload_id})
     );

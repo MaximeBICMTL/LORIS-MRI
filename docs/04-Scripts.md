@@ -140,7 +140,7 @@ See also: [MRI-PR#141](https://github.com/aces/Loris-MRI/pull/141) for more
 NIfTI volumes with their JSON sidecar files can be **force-loaded** into LORIS by running:
 
 ```
-python/run_nifti_insertion.py --loris_scan_type t2w --bypass_extra_checks --create_pic --profile config.py --force  --tarchive_path /data/project/dataTransfer/library/2009/DCM_2009-09-25_project_20110214_185904581.tar --nifti_path /data/project/data/trashbin/TarLoad-3-34-pVzGC5/xxx0067_703739_v12_20090925_222403_18e1_mri.nii.gz --json_path /data/project/data/trashbin/TarLoad-3-34-pVzGC5/xxx0067_703739_v12_20090925_222403_18e1_mri.json
+insert-nifti --loris_scan_type t2w --bypass_extra_checks --create_pic --profile config.py --force  --tarchive_path /data/project/dataTransfer/library/2009/DCM_2009-09-25_project_20110214_185904581.tar --nifti_path /data/project/data/trashbin/TarLoad-3-34-pVzGC5/xxx0067_703739_v12_20090925_222403_18e1_mri.nii.gz --json_path /data/project/data/trashbin/TarLoad-3-34-pVzGC5/xxx0067_703739_v12_20090925_222403_18e1_mri.json
 ```
 
 Note carefully the following arguments:
@@ -152,7 +152,7 @@ Note carefully the following arguments:
 ### 4.3.2 Rerunning the Imaging pipeline
 
 - If one of the final steps such as the MINC (or BIDS) conversion is failing, you may
-    wish to just re-run the `tarchiveLoader.pl` (or `run_dicom_archive_loader.py`) script.
+    wish to just re-run the `tarchiveLoader.pl` (or `convert-dicom-archive-to-bids`) script.
 
 > When the need arises to re-load imaging data in LORIS, it is generally not
    sufficient to just re-run the MINC/NIfTI loading step (`tarchiveLoader.pl` or
