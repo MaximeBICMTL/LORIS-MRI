@@ -217,7 +217,7 @@ class PhysiologicalCoordSystem:
         :return            : The coordinate system ID or None
          :rtype            : int
         """
-        coord_system_id = self.grep_coord_system(mod_id, name_id, unit_id, type_id)
+        coord_system_id = None # self.grep_coord_system(mod_id, name_id, unit_id, type_id)
         if coord_system_id is None:
             coord_system_id = self.insert_coord_system(name_id, unit_id, type_id, mod_id, coord_file)
         return coord_system_id
