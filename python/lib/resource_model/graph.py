@@ -4,7 +4,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
 from lib.resource_model.resources import PhysicalObject, PhysicalObjectRef, ResourceObject, ResourceRef
-from lib.resource_model.schema import LogicalObject, ObjectRef, Relationship, ResourceBinding
+from lib.resource_model.schema import LogicalObject, ObjectLink, ObjectRef
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,8 +13,7 @@ class GraphFragment:
 
     logical_objects: tuple[LogicalObject, ...] = ()
     physical_objects: tuple[PhysicalObject, ...] = ()
-    relationships: tuple[Relationship, ...] = ()
-    resource_bindings: tuple[ResourceBinding, ...] = ()
+    links: tuple[ObjectLink, ...] = ()
 
     @property
     def objects(self) -> tuple[ResourceObject, ...]:
@@ -27,20 +26,15 @@ class ResourceGraph:
     def __init__(self) -> None:
         self._logical_objects: dict[ObjectRef, LogicalObject] = {}
         self._physical_objects: dict[PhysicalObjectRef, PhysicalObject] = {}
-        self._relationships: set[Relationship] = set()
-        self._resource_bindings: set[ResourceBinding] = set()
+        self._links: set[ObjectLink] = set()
 
     @property
     def objects(self) -> tuple[ResourceObject, ...]:
         return (*self._logical_objects.values(), *self._physical_objects.values())
 
     @property
-    def relationships(self) -> tuple[Relationship, ...]:
-        return tuple(self._relationships)
-
-    @property
-    def resource_bindings(self) -> tuple[ResourceBinding, ...]:
-        return tuple(self._resource_bindings)
+    def links(self) -> tuple[ObjectLink, ...]:
+        return tuple(self._links)
 
     @property
     def logical_objects(self) -> tuple[LogicalObject, ...]:
@@ -61,21 +55,23 @@ class ResourceGraph:
             if existing is not None and existing != physical_object:
                 raise ValueError(f"Conflicting resolutions of {physical_object.ref}")
             self._physical_objects[physical_object.ref] = physical_object
-        self._relationships.update(fragment.relationships)
-        self._resource_bindings.update(fragment.resource_bindings)
+        self._links.update(fragment.links)
 
     def get(self, ref: ResourceRef) -> ResourceObject | None:
         if isinstance(ref, ObjectRef):
             return self._logical_objects.get(ref)
         return self._physical_objects.get(ref)
 
-    def outgoing(self, ref: ObjectRef) -> Iterator[Relationship]:
-        return (edge for edge in self._relationships if edge.source == ref)
+    def outgoing(self, ref: ResourceRef) -> Iterator[ObjectLink]:
+        return (link for link in self._links if link.source == ref)
 
     def unresolved_refs(self) -> frozenset[ObjectRef]:
         """Return relationship endpoints not yet resolved into this partial graph."""
 
         endpoints: Iterable[ObjectRef] = (
-            endpoint for edge in self._relationships for endpoint in (edge.source, edge.target)
+            endpoint
+            for link in self._links
+            for endpoint in (link.source, link.target)
+            if isinstance(endpoint, ObjectRef)
         )
         return frozenset(endpoint for endpoint in endpoints if endpoint not in self._logical_objects)

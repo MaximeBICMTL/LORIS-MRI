@@ -6,22 +6,19 @@ from typing import Any, Protocol, TypeVar
 from sqlalchemy.orm import Session
 
 from lib.resource_model.graph import GraphFragment
+from lib.resource_model.resources import ObjectRef, ResourceObject
 from lib.resource_model.schema import (
-    BoundResource,
+    LinkMember,
     LogicalObject,
     ObjectKind,
-    ObjectProperty,
-    ObjectRef,
+    ObjectLink,
     ObjectSelection,
     PropertyCriterion,
     PropertyPath,
     PropertyPredicate,
     PropertyRef,
-    Relationship,
-    RelationshipBinding,
-    RelationshipKind,
     RelationshipSemantics,
-    ResourceBinding,
+    ValueMember,
 )
 
 ObjectT = TypeVar("ObjectT", bound=LogicalObject)
@@ -46,44 +43,39 @@ class ResourceSchema:
 
     def __init__(self) -> None:
         self._object_kinds: dict[str, ObjectKind] = {}
-        self._relationship_kinds: dict[str, RelationshipKind] = {}
         self._providers: dict[str, ResourceProvider[Any]] = {}
-        self._relationship_bindings: dict[str, RelationshipBinding[Any]] = {}
 
     @property
     def object_kinds(self) -> tuple[ObjectKind, ...]:
         return tuple(self._object_kinds.values())
 
-    @property
-    def relationship_kinds(self) -> tuple[RelationshipKind, ...]:
-        return tuple(self._relationship_kinds.values())
-
     def register_object_kind(self, kind: ObjectKind) -> None:
         if kind.name in self._object_kinds:
             raise ValueError(f"Object kind {kind.name!r} is already registered")
-        property_names = [property_definition.name for property_definition in kind.object_type.properties]
-        if len(property_names) != len(set(property_names)):
-            raise ValueError(f"Object kind {kind.name!r} contains duplicate property names")
-        self._object_kinds[kind.name] = kind
-
-    def register_relationship_kind(self, kind: RelationshipKind) -> None:
-        if kind.name in self._relationship_kinds:
-            raise ValueError(f"Relationship kind {kind.name!r} is already registered")
-        missing = {kind.source_kind, kind.target_kind} - self._object_kinds.keys()
-        if missing:
-            raise ValueError(f"Relationship {kind.name!r} uses unknown object kinds: {sorted(missing)}")
-        if not kind.member_name or "." in kind.member_name:
-            raise ValueError(f"Relationship {kind.name!r} has an invalid member name")
-        if any(
-            registered.source_kind == kind.source_kind
-            and registered.member_name == kind.member_name
-            for registered in self._relationship_kinds.values()
-        ):
+        member_names = [member.name for member in kind.members]
+        if len(member_names) != len(set(member_names)):
+            raise ValueError(f"Object kind {kind.name!r} contains duplicate member names")
+        if any(not name or "." in name for name in member_names):
+            raise ValueError(f"Object kind {kind.name!r} contains an invalid member name")
+        missing_targets = {
+            member.target_kind
+            for member in kind.members
+            if isinstance(member, LinkMember) and member.target_kind not in self._object_kinds
+        }
+        if missing_targets:
             raise ValueError(
-                f"Object kind {kind.source_kind!r} already has a relationship member "
-                f"named {kind.member_name!r}"
+                f"Object kind {kind.name!r} links to unknown object kinds: {sorted(missing_targets)}"
             )
-        self._relationship_kinds[kind.name] = kind
+        wrong_sources = {
+            member.source_kind
+            for member in kind.members
+            if isinstance(member, LinkMember) and member.source_kind != kind.name
+        }
+        if wrong_sources:
+            raise ValueError(
+                f"Object kind {kind.name!r} contains links for source kinds {sorted(wrong_sources)}"
+            )
+        self._object_kinds[kind.name] = kind
 
     def register_provider(self, provider: ResourceProvider[Any]) -> None:
         kind_name = provider.kind.name
@@ -93,59 +85,68 @@ class ResourceSchema:
             raise ValueError(f"Provider for {kind_name!r} is already registered")
         self._providers[kind_name] = provider
 
+    def register_member(self, kind: str, member: ValueMember[Any, Any, Any] | LinkMember[Any]) -> None:
+        definition = self.object_kind(kind)
+        if any(existing.name == member.name for existing in definition.members):
+            raise ValueError(f"Object kind {kind!r} already has a member named {member.name!r}")
+        if isinstance(member, LinkMember):
+            if member.source_kind != kind:
+                raise ValueError(f"Link member {member.name!r} has the wrong source kind")
+            if member.target_kind not in self._object_kinds:
+                raise ValueError(f"Link member {member.name!r} uses an unknown target kind")
+        self._object_kinds[kind] = ObjectKind(
+            name=definition.name,
+            object_type=definition.object_type,
+            members=(*definition.members, member),
+        )
+
     def provider(self, kind: str) -> ResourceProvider[Any]:
         try:
             return self._providers[kind]
         except KeyError as error:
             raise ValueError(f"No provider is registered for object kind {kind!r}") from error
 
-    def register_relationship_binding(self, binding: RelationshipBinding[Any]) -> None:
-        name = binding.kind.name
-        if self._relationship_kinds.get(name) is not binding.kind:
-            raise ValueError(f"Relationship kind {name!r} must be registered before its query binding")
-        if name in self._relationship_bindings:
-            raise ValueError(f"Query binding for relationship {name!r} is already registered")
-        self._relationship_bindings[name] = binding
+    def has_provider(self, kind: str) -> bool:
+        return kind in self._providers
 
-    def relationship_binding(self, name: str) -> RelationshipBinding[Any]:
+    def object_kind(self, kind: str) -> ObjectKind:
         try:
-            return self._relationship_bindings[name]
-        except KeyError as error:
-            raise ValueError(f"No query binding is registered for relationship {name!r}") from error
-
-    def properties(self, kind: str) -> tuple[ObjectProperty[Any, Any, Any], ...]:
-        try:
-            return self._object_kinds[kind].object_type.properties
+            return self._object_kinds[kind]
         except KeyError as error:
             raise ValueError(f"Unknown object kind {kind!r}") from error
 
-    def queryable_properties(self, kind: str) -> tuple[ObjectProperty[Any, Any, Any], ...]:
+    def kind_for_object(self, obj: ResourceObject) -> ObjectKind:
+        matches = [kind for kind in self._object_kinds.values() if isinstance(obj, kind.object_type)]
+        if len(matches) != 1:
+            raise ValueError(f"Expected exactly one registered kind for {type(obj).__name__}")
+        return matches[0]
+
+    def members(self, kind: str) -> tuple[ValueMember[Any, Any, Any] | LinkMember[Any], ...]:
+        try:
+            return self._object_kinds[kind].members
+        except KeyError as error:
+            raise ValueError(f"Unknown object kind {kind!r}") from error
+
+    def properties(self, kind: str) -> tuple[ValueMember[Any, Any, Any], ...]:
         return tuple(
-            property_definition
-            for property_definition in self.properties(kind)
-            if property_definition.queryable
+            member for member in self.members(kind) if isinstance(member, ValueMember)
         )
 
-    def relationships(self, kind: str) -> tuple[RelationshipKind, ...]:
-        """Return the semantic relationship members exposed by an object kind."""
-
-        if kind not in self._object_kinds:
-            raise ValueError(f"Unknown object kind {kind!r}")
+    def queryable_properties(self, kind: str) -> tuple[ValueMember[Any, Any, Any], ...]:
         return tuple(
-            relationship
-            for relationship in self._relationship_kinds.values()
-            if relationship.source_kind == kind
+            member for member in self.properties(kind) if member.queryable
         )
 
-    def relationship(self, kind: str, member_name: str) -> RelationshipKind:
-        """Resolve one relationship through its source-scoped semantic member name."""
+    def links(self, kind: str) -> tuple[LinkMember[Any], ...]:
+        return tuple(member for member in self.members(kind) if isinstance(member, LinkMember))
 
-        for relationship in self.relationships(kind):
-            if relationship.member_name == member_name:
-                return relationship
-        raise ValueError(f"Unknown relationship {kind}.{member_name}")
+    def link(self, kind: str, member_name: str) -> LinkMember[Any]:
+        for member in self.links(kind):
+            if member.name == member_name:
+                return member
+        raise ValueError(f"Unknown object link {kind}.{member_name}")
 
-    def property(self, ref: PropertyRef | str) -> ObjectProperty[Any, Any, Any]:
+    def property(self, ref: PropertyRef | str) -> ValueMember[Any, Any, Any]:
         property_ref = PropertyRef.from_path(ref) if isinstance(ref, str) else ref
         for property_definition in self.properties(property_ref.object_kind):
             if property_definition.name == property_ref.property_name:
@@ -153,7 +154,7 @@ class ResourceSchema:
         raise ValueError(f"Unknown property {property_ref}")
 
     def property_path(self, path: str) -> PropertyPath:
-        """Resolve a schema-aware relationship path ending in a property."""
+        """Resolve object-valued members followed by a scalar-valued member."""
 
         candidates: list[PropertyPath] = []
         for root_kind in self._object_kinds:
@@ -164,12 +165,12 @@ class ResourceSchema:
             if not components or any(not component for component in components):
                 continue
             current_kind = root_kind
-            relationship_members: list[str] = []
+            link_members: list[str] = []
             try:
                 for member_name in components[:-1]:
-                    relationship = self.relationship(current_kind, member_name)
-                    relationship_members.append(member_name)
-                    current_kind = relationship.target_kind
+                    link = self.link(current_kind, member_name)
+                    link_members.append(member_name)
+                    current_kind = link.target_kind
                 property_ref = PropertyRef(current_kind, components[-1])
                 self.property(property_ref)
             except ValueError:
@@ -177,7 +178,7 @@ class ResourceSchema:
             candidates.append(
                 PropertyPath(
                     root_kind=root_kind,
-                    relationship_members=tuple(relationship_members),
+                    link_members=tuple(link_members),
                     property=property_ref,
                 )
             )
@@ -187,18 +188,18 @@ class ResourceSchema:
             raise ValueError(f"Ambiguous property path {path!r}")
         return candidates[0]
 
-    def path_bindings(self, path: PropertyPath) -> tuple[RelationshipBinding[Any], ...]:
-        """Resolve the ordered relationship bindings traversed by a property path."""
+    def path_links(self, path: PropertyPath) -> tuple[LinkMember[Any], ...]:
+        """Resolve the ordered object-valued members traversed by a property path."""
 
         current_kind = path.root_kind
-        bindings: list[RelationshipBinding[Any]] = []
-        for member_name in path.relationship_members:
-            relationship = self.relationship(current_kind, member_name)
-            bindings.append(self.relationship_binding(relationship.name))
-            current_kind = relationship.target_kind
+        links: list[LinkMember[Any]] = []
+        for member_name in path.link_members:
+            link = self.link(current_kind, member_name)
+            links.append(link)
+            current_kind = link.target_kind
         if current_kind != path.property.object_kind:
             raise ValueError(f"Property path {path} ends at the wrong object kind")
-        return tuple(bindings)
+        return tuple(links)
 
     def predicate(self, criterion: PropertyCriterion) -> PropertyPredicate[Any]:
         return self.property(criterion.property).predicate(criterion.value)
@@ -224,49 +225,42 @@ class ResourceSchema:
             value=property_definition.query.operand_type.parse(text),
         )
 
-    def outgoing_bindings(self, source_kind: str) -> tuple[RelationshipBinding[Any], ...]:
-        return tuple(
-            binding
-            for binding in self._relationship_bindings.values()
-            if binding.kind.source_kind == source_kind
-        )
-
-    def belongs_to_path(self, source_kind: str, target_kind: str) -> tuple[RelationshipBinding[Any], ...]:
+    def belongs_to_path(self, source_kind: str, target_kind: str) -> tuple[LinkMember[Any], ...]:
         """Find the unique transitive belongs-to path between two object kinds."""
 
         if source_kind == target_kind:
             return ()
-        paths: list[tuple[RelationshipKind, ...]] = []
+        paths: list[tuple[LinkMember[Any], ...]] = []
 
-        def visit(current: str, path: tuple[RelationshipKind, ...], visited: frozenset[str]) -> None:
-            for relationship in self._relationship_kinds.values():
+        def visit(current: str, path: tuple[LinkMember[Any], ...], visited: frozenset[str]) -> None:
+            for link in self.links(current):
                 if (
-                    relationship.source_kind != current
-                    or relationship.semantics is not RelationshipSemantics.BELONGS_TO
-                    or relationship.target_kind in visited
+                    link.traversal_semantics is not RelationshipSemantics.BELONGS_TO
+                    or link.source_selection is None
+                    or link.target_kind in visited
                 ):
                     continue
-                next_path = (*path, relationship)
-                if relationship.target_kind == target_kind:
+                next_path = (*path, link)
+                if link.target_kind == target_kind:
                     paths.append(next_path)
                 else:
-                    visit(relationship.target_kind, next_path, visited | {relationship.target_kind})
+                    visit(link.target_kind, next_path, visited | {link.target_kind})
 
         visit(source_kind, (), frozenset({source_kind}))
         if not paths:
             raise ValueError(f"No belongs-to path exists from {source_kind!r} to {target_kind!r}")
         if len(paths) > 1:
-            rendered = [" -> ".join(relationship.name for relationship in path) for path in paths]
+            rendered = [" -> ".join(link.name for link in path) for path in paths]
             raise ValueError(
                 f"Ambiguous belongs-to path from {source_kind!r} to {target_kind!r}: {rendered}"
             )
-        return tuple(self.relationship_binding(relationship.name) for relationship in paths[0])
+        return paths[0]
 
     def belongs_to_connection(
         self,
         source_kind: str,
         target_kind: str,
-    ) -> tuple[tuple[RelationshipBinding[Any], bool], ...]:
+    ) -> tuple[tuple[LinkMember[Any], bool], ...]:
         """Find a unique belongs-to path, allowing traversal in either direction.
 
         The boolean on each step is true when traversing from the relationship's
@@ -275,27 +269,30 @@ class ResourceSchema:
 
         if source_kind == target_kind:
             return ()
-        paths: list[tuple[tuple[RelationshipKind, bool], ...]] = []
+        paths: list[tuple[tuple[str, LinkMember[Any], bool], ...]] = []
 
         def visit(
             current: str,
-            path: tuple[tuple[RelationshipKind, bool], ...],
+            path: tuple[tuple[str, LinkMember[Any], bool], ...],
             visited: frozenset[str],
         ) -> None:
-            for relationship in self._relationship_kinds.values():
-                if relationship.semantics is not RelationshipSemantics.BELONGS_TO:
-                    continue
-                if relationship.source_kind == current:
-                    neighbor = relationship.target_kind
-                    forward = True
-                elif relationship.target_kind == current:
-                    neighbor = relationship.source_kind
-                    forward = False
+            candidates = (
+                (source_kind, link)
+                for source_kind in self._object_kinds
+                for link in self.links(source_kind)
+                if link.traversal_semantics is RelationshipSemantics.BELONGS_TO
+                and link.source_selection is not None
+            )
+            for link_source, link in candidates:
+                if link_source == current:
+                    neighbor, forward = link.target_kind, True
+                elif link.target_kind == current:
+                    neighbor, forward = link_source, False
                 else:
                     continue
                 if neighbor in visited:
                     continue
-                next_path = (*path, (relationship, forward))
+                next_path = (*path, (link_source, link, forward))
                 if neighbor == target_kind:
                     paths.append(next_path)
                 else:
@@ -305,25 +302,12 @@ class ResourceSchema:
         if not paths:
             raise ValueError(f"No belongs-to connection exists from {source_kind!r} to {target_kind!r}")
         if len(paths) > 1:
-            rendered = [" -> ".join(step[0].name for step in path) for path in paths]
+            rendered = [" -> ".join(step[1].name for step in path) for path in paths]
             raise ValueError(
                 f"Ambiguous belongs-to connection from {source_kind!r} to {target_kind!r}: "
                 f"{rendered}"
             )
-        return tuple(
-            (self.relationship_binding(relationship.name), forward)
-            for relationship, forward in paths[0]
-        )
-
-    def validate_relationship(self, relationship: Relationship) -> None:
-        try:
-            definition = self._relationship_kinds[relationship.kind]
-        except KeyError as error:
-            raise ValueError(f"Unknown relationship kind {relationship.kind!r}") from error
-        if relationship.source.kind != definition.source_kind:
-            raise ValueError(f"Invalid source kind for relationship {relationship.kind!r}")
-        if relationship.target.kind != definition.target_kind:
-            raise ValueError(f"Invalid target kind for relationship {relationship.kind!r}")
+        return tuple((link, forward) for _, link, forward in paths[0])
 
 
 class ResourceModel:
@@ -351,31 +335,32 @@ class ResourceModel:
             if not isinstance(logical_object, registered_kind.object_type):
                 raise TypeError(f"Invalid object class for {logical_object.ref}")
 
-        relationships = tuple(
-            Relationship(kind=binding.kind.name, source=obj.ref, target=target)
-            for binding in self.schema.outgoing_bindings(provider.kind.name)
-            for obj in objects
-            for target in binding.targets_for_source(obj)
-        )
-        for relationship in relationships:
-            self.schema.validate_relationship(relationship)
-
-        bound_resources: tuple[tuple[ObjectRef, BoundResource], ...] = tuple(
-            (logical_object.ref, bound_resource)
+        targets = tuple(
+            (logical_object.ref, link, target)
             for logical_object in objects
-            for bound_resource in logical_object.bound_resources
+            for link in self.schema.links(provider.kind.name)
+            for target in link.targets_for_source(logical_object)
         )
+        for _, link, target in targets:
+            target_kind = next(kind for kind in self.schema.object_kinds if kind.name == link.target_kind)
+            if isinstance(target, ObjectRef):
+                if target.kind != link.target_kind:
+                    raise ValueError(f"Invalid target kind for link {link.source_kind}.{link.name}")
+            elif not isinstance(target, target_kind.object_type):
+                raise TypeError(f"Invalid target object for link {link.source_kind}.{link.name}")
+
         return GraphFragment(
             logical_objects=objects,
-            physical_objects=tuple(bound.object for _, bound in bound_resources),
-            relationships=relationships,
-            resource_bindings=tuple(
-                ResourceBinding(
+            physical_objects=tuple(
+                target for _, _, target in targets if not isinstance(target, ObjectRef)
+            ),
+            links=tuple(
+                ObjectLink(
+                    member=PropertyRef(link.source_kind, link.name),
                     source=source,
-                    target=bound.object.ref,
-                    semantics=bound.semantics,
+                    target=target if isinstance(target, ObjectRef) else target.ref,
                 )
-                for source, bound in bound_resources
+                for source, link, target in targets
             ),
         )
 
@@ -393,7 +378,7 @@ class ResourceModel:
         constrained_refs = refs
         for criterion in criteria:
             predicate = self.schema.predicate(criterion)
-            if criterion.path.root_kind == kind and not criterion.path.relationship_members:
+            if criterion.path.root_kind == kind and not criterion.path.link_members:
                 local_predicates.append(predicate)
                 continue
             matching_refs = self._matching_refs(db, kind, criterion.path, predicate)
@@ -421,21 +406,25 @@ class ResourceModel:
             ObjectSelection(predicates=(predicate,)),
         )
         target_refs = frozenset(obj.ref for obj in target_fragment.logical_objects)
-        for binding in reversed(self.schema.path_bindings(property_path)):
+        for link in reversed(self.schema.path_links(property_path)):
+            if link.source_selection is None:
+                raise ValueError(f"Object link {link.source_kind}.{link.name} is not queryable")
             source_fragment = self.resolve(
                 db,
-                self.schema.provider(binding.kind.source_kind),
-                binding.source_selection(target_refs),
+                self.schema.provider(link.source_kind),
+                link.source_selection(target_refs),
             )
             target_refs = frozenset(obj.ref for obj in source_fragment.logical_objects)
         if source_kind == property_path.root_kind:
             return target_refs
         implicit_path = self.schema.belongs_to_path(source_kind, property_path.root_kind)
-        for binding in reversed(implicit_path):
+        for link in reversed(implicit_path):
+            if link.source_selection is None:
+                raise ValueError(f"Object link {link.source_kind}.{link.name} is not queryable")
             source_fragment = self.resolve(
                 db,
-                self.schema.provider(binding.kind.source_kind),
-                binding.source_selection(target_refs),
+                self.schema.provider(link.source_kind),
+                link.source_selection(target_refs),
             )
             target_refs = frozenset(obj.ref for obj in source_fragment.logical_objects)
         return target_refs
@@ -444,28 +433,31 @@ class ResourceModel:
         self,
         db: Session,
         refs: frozenset[ObjectRef],
-        steps: tuple[tuple[RelationshipBinding[Any], bool], ...],
+        steps: tuple[tuple[LinkMember[Any], bool], ...],
     ) -> frozenset[ObjectRef]:
         """Propagate object references through preplanned relationship steps."""
 
         current_refs = refs
-        for binding, forward in steps:
+        for link, forward in steps:
             if forward:
                 fragment = self.resolve(
                     db,
-                    self.schema.provider(binding.kind.source_kind),
+                    self.schema.provider(link.source_kind),
                     ObjectSelection(refs=current_refs),
                 )
                 current_refs = frozenset(
                     target
                     for logical_object in fragment.logical_objects
-                    for target in binding.targets_for_source(logical_object)
+                    for target in link.targets_for_source(logical_object)
+                    if isinstance(target, ObjectRef)
                 )
             else:
+                if link.source_selection is None:
+                    raise ValueError(f"Object link {link.source_kind}.{link.name} is not queryable")
                 fragment = self.resolve(
                     db,
-                    self.schema.provider(binding.kind.source_kind),
-                    binding.source_selection(current_refs),
+                    self.schema.provider(link.source_kind),
+                    link.source_selection(current_refs),
                 )
                 current_refs = frozenset(
                     logical_object.ref for logical_object in fragment.logical_objects

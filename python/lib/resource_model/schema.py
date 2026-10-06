@@ -7,15 +7,27 @@ objects projected from those models and the relationships between those objects.
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, ClassVar, Generic, Protocol, TypeVar
+from typing import Any, Generic, Protocol, TypeAlias, TypeVar
 
 from sqlalchemy.sql import Select
 
-from lib.resource_model.resources import ObjectRef, PhysicalObject, PhysicalObjectRef, ResourceObject
+from lib.resource_model.resources import (
+    LocalPathObject,
+    ObjectRef,
+    PhysicalObject,
+    ResourceObject,
+    ResourceRef,
+)
 
 ObjectT = TypeVar("ObjectT")
 ValueT = TypeVar("ValueT")
 FilterT = TypeVar("FilterT")
+
+
+class PropertyReadContext(Protocol):
+    """External services used while reading properties from resolved objects."""
+
+    def local_path_size(self, obj: LocalPathObject) -> int: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,12 +81,12 @@ class PropertyQuery(Generic[FilterT]):
 
 
 @dataclass(frozen=True, slots=True)
-class ObjectProperty(Generic[ObjectT, ValueT, FilterT]):
-    """A semantic property exposed to generic resource-model consumers."""
+class ValueMember(Generic[ObjectT, ValueT, FilterT]):
+    """A scalar-valued member exposed to generic resource-model consumers."""
 
     name: str
     value_type: PropertyType[ValueT]
-    get_value: Callable[[ObjectT], ValueT]
+    get_value: Callable[[ObjectT, PropertyReadContext], ValueT]
     query: PropertyQuery[FilterT] | None = None
 
     @property
@@ -105,7 +117,7 @@ class ObjectProperty(Generic[ObjectT, ValueT, FilterT]):
 class PropertyPredicate(Generic[ObjectT]):
     """A property filter bound to its value but independent of a provider query."""
 
-    property: ObjectProperty[ObjectT, Any, Any]
+    property: ValueMember[ObjectT, Any, Any]
     value: object
 
     def apply(self, statement: Select[Any]) -> Select[Any]:
@@ -144,14 +156,14 @@ class PropertyRef:
 
 @dataclass(frozen=True, slots=True)
 class PropertyPath:
-    """A property reached from a root object through semantic relationships."""
+    """A value member reached from a root object through object-valued members."""
 
     root_kind: str
-    relationship_members: tuple[str, ...]
+    link_members: tuple[str, ...]
     property: PropertyRef
 
     def __str__(self) -> str:
-        components = (self.root_kind, *self.relationship_members, self.property.property_name)
+        components = (self.root_kind, *self.link_members, self.property.property_name)
         return ".".join(components)
 
 
@@ -190,7 +202,7 @@ class ObjectSelection(Generic[ObjectT]):
     def apply_filters(
         self,
         statement: Select[Any],
-        properties: tuple[ObjectProperty[Any, Any, Any], ...],
+        properties: tuple[ValueMember[Any, Any, Any], ...],
     ) -> Select[Any]:
         """Apply predicates after checking that they belong to the selected kind."""
 
@@ -207,45 +219,15 @@ class ObjectSelection(Generic[ObjectT]):
 class LogicalObject(ResourceObject, Protocol):
     """Session-bound semantic object exposed through the registered schema."""
 
-    properties: ClassVar[tuple[ObjectProperty[Any, Any, Any], ...]]
-
     @property
     def ref(self) -> ObjectRef: ...
 
-    @property
-    def bound_resources(self) -> tuple["BoundResource", ...]: ...
 
-
-class ResourceBindingSemantics(StrEnum):
-    """Minimal lifecycle meaning of a logical-to-physical object binding."""
+class LifecycleSemantics(StrEnum):
+    """Lifecycle meaning of an object-valued member."""
 
     OWNS = "owns"
     REFERENCES = "references"
-
-
-@dataclass(frozen=True, slots=True)
-class BoundResource:
-    """A physical object discovered from a logical object and its lifecycle meaning."""
-
-    object: PhysicalObject
-    semantics: ResourceBindingSemantics = ResourceBindingSemantics.OWNS
-
-
-@dataclass(frozen=True, slots=True)
-class ResourceBinding:
-    """Concrete graph edge from a logical object to a physical object."""
-
-    source: ObjectRef
-    target: PhysicalObjectRef
-    semantics: ResourceBindingSemantics
-
-
-@dataclass(frozen=True, slots=True)
-class ObjectKind:
-    """Schema definition for a kind of logical object."""
-
-    name: str
-    object_type: type[LogicalObject]
 
 
 class RelationshipSemantics(StrEnum):
@@ -262,30 +244,35 @@ class RelationshipSemantics(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class RelationshipKind:
-    """Schema definition for a directed relationship between object kinds."""
+class LinkMember(Generic[ObjectT]):
+    """Object-valued member with optional query traversal and lifecycle behavior."""
 
     name: str
-    member_name: str
     source_kind: str
     target_kind: str
-    semantics: RelationshipSemantics
+    targets_for_source: Callable[[ObjectT], tuple[ObjectRef | PhysicalObject, ...]]
+    source_selection: Callable[[frozenset[ObjectRef]], ObjectSelection[Any]] | None = None
+    traversal_semantics: RelationshipSemantics | None = None
+    lifecycle: LifecycleSemantics | None = None
     target_may_be_shared: bool = False
 
 
-@dataclass(frozen=True, slots=True)
-class RelationshipBinding(Generic[ObjectT]):
-    """Forward discovery and reverse-query behavior for a relationship."""
-
-    kind: RelationshipKind
-    targets_for_source: Callable[[ObjectT], tuple[ObjectRef, ...]]
-    source_selection: Callable[[frozenset[ObjectRef]], ObjectSelection[Any]]
+ObjectMember: TypeAlias = ValueMember[Any, Any, Any] | LinkMember[Any]
 
 
 @dataclass(frozen=True, slots=True)
-class Relationship:
-    """A relationship between two concrete logical-object instances."""
+class ObjectKind:
+    """Schema definition for an inspectable kind of resource object."""
 
-    kind: str
-    source: ObjectRef
-    target: ObjectRef
+    name: str
+    object_type: type[ResourceObject]
+    members: tuple[ObjectMember, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectLink:
+    """A concrete object-valued member in a resource graph."""
+
+    member: PropertyRef
+    source: ResourceRef
+    target: ResourceRef

@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Any, ClassVar
+from typing import Any
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -11,64 +11,95 @@ from sqlalchemy.sql import Select
 from lib.db.models.dicom_archive import DbDicomArchive
 from lib.db.models.mri_upload import DbMriUpload
 from lib.resource_model.provider import ResourceSchema
-from lib.resource_model.providers.core import SESSION, session_relationship
-from lib.resource_model.resources import DatabaseRowObject, LocalPathObject, LocalPathType
+from lib.resource_model.providers.core import (
+    DATABASE_ROW_KIND,
+    SESSION,
+    session_link,
+)
+from lib.resource_model.resources import DatabaseRowObject, LocalPathObject, LocalPathType, ObjectRef
 from lib.resource_model.schema import (
     INTEGER_TYPE,
     STRING_TYPE,
-    BoundResource,
+    LifecycleSemantics,
+    LinkMember,
     ObjectKind,
-    ObjectProperty,
-    ObjectRef,
     ObjectSelection,
     PropertyQuery,
-    RelationshipBinding,
-    ResourceBindingSemantics,
     SelectionConstraint,
+    ValueMember,
+)
+
+DICOM_ARCHIVE_KIND = "dicom-archive"
+LOCAL_PATH_KIND = "local-path"
+
+
+LOCAL_PATH_STORAGE_ROOT = ValueMember[LocalPathObject, str, object](
+    name="storage-root",
+    value_type=STRING_TYPE,
+    get_value=lambda obj, _: obj.storage_root,
+)
+LOCAL_PATH_RELATIVE_PATH = ValueMember[LocalPathObject, str, object](
+    name="relative-path",
+    value_type=STRING_TYPE,
+    get_value=lambda obj, _: str(obj.relative_path),
+)
+LOCAL_PATH_EXPECTED_TYPE = ValueMember[LocalPathObject, str, object](
+    name="expected-type",
+    value_type=STRING_TYPE,
+    get_value=lambda obj, _: obj.expected_type.value,
+)
+LOCAL_PATH_SIZE = ValueMember[LocalPathObject, int, object](
+    name="size",
+    value_type=INTEGER_TYPE,
+    get_value=lambda obj, context: context.local_path_size(obj),
+)
+LOCAL_PATH = ObjectKind(
+    LOCAL_PATH_KIND,
+    LocalPathObject,
+    (
+        LOCAL_PATH_STORAGE_ROOT,
+        LOCAL_PATH_RELATIVE_PATH,
+        LOCAL_PATH_EXPECTED_TYPE,
+        LOCAL_PATH_SIZE,
+    ),
 )
 
 
 @dataclass(frozen=True, slots=True)
 class DicomArchiveObject:
-    """Logical DICOM archive bound to an ORM graph in the current unit of work."""
-
     orm: DbDicomArchive
-    properties: ClassVar[tuple[ObjectProperty[Any, Any, Any], ...]]
 
     @property
     def ref(self) -> ObjectRef:
-        return ObjectRef(DICOM_ARCHIVE.name, str(self.orm.id))
+        return ObjectRef(DICOM_ARCHIVE_KIND, str(self.orm.id))
 
-    @property
-    def bound_resources(self) -> tuple[BoundResource, ...]:
-        resources = [
-            BoundResource(DatabaseRowObject(self.orm)),
-            *(BoundResource(DatabaseRowObject(series)) for series in self.orm.series),
-            *(BoundResource(DatabaseRowObject(archive_file)) for archive_file in self.orm.files),
-            *(
-                BoundResource(
-                    DatabaseRowObject(upload),
-                    semantics=ResourceBindingSemantics.REFERENCES,
-                )
-                for upload in self.orm.mri_uploads
-            ),
-        ]
-        if self.orm.path is not None:
-            resources.append(
-                BoundResource(
-                    LocalPathObject(
-                        storage_root="dicom_archive",
-                        relative_path=PurePosixPath(self.orm.path.as_posix()),
-                        expected_type=LocalPathType.FILE,
-                    )
-                )
-            )
-        return tuple(resources)
 
-    def session_refs(self) -> tuple[ObjectRef, ...]:
-        """Return the sessions associated through direct or MRI-upload links."""
-
-        return tuple(ObjectRef(SESSION.name, str(session_id)) for session_id in _session_ids(self))
+DICOM_ID = ValueMember[DicomArchiveObject, int, int](
+    name="id",
+    value_type=INTEGER_TYPE,
+    get_value=lambda obj, _: obj.orm.id,
+    query=PropertyQuery(
+        INTEGER_TYPE, lambda query, value: query.where(DbDicomArchive.id == value)
+    ),
+)
+DICOM_STUDY_UID = ValueMember[DicomArchiveObject, str, str](
+    name="study-uid",
+    value_type=STRING_TYPE,
+    get_value=lambda obj, _: obj.orm.study_uid,
+    query=PropertyQuery(
+        STRING_TYPE, lambda query, value: query.where(DbDicomArchive.study_uid == value)
+    ),
+)
+DICOM_PATIENT_NAME = ValueMember[DicomArchiveObject, str, object](
+    name="patient-name",
+    value_type=STRING_TYPE,
+    get_value=lambda obj, _: obj.orm.patient_name,
+)
+DICOM_ACQUISITION_COUNT = ValueMember[DicomArchiveObject, int, object](
+    name="acquisition-count",
+    value_type=INTEGER_TYPE,
+    get_value=lambda obj, _: obj.orm.acquisition_count,
+)
 
 
 def _session_ids(obj: DicomArchiveObject) -> tuple[int, ...]:
@@ -87,63 +118,90 @@ def _filter_by_session_ids(query: Select[Any], session_ids: frozenset[int]) -> S
     )
 
 
-DICOM_ID = ObjectProperty[DicomArchiveObject, int, int](
-    name="id",
-    value_type=INTEGER_TYPE,
-    get_value=lambda obj: obj.orm.id,
-    query=PropertyQuery(
-        operand_type=INTEGER_TYPE,
-        apply=lambda query, value: query.where(DbDicomArchive.id == value),
-    ),
-)
-DICOM_STUDY_UID = ObjectProperty[DicomArchiveObject, str, str](
-    name="study-uid",
-    value_type=STRING_TYPE,
-    get_value=lambda obj: obj.orm.study_uid,
-    query=PropertyQuery(
-        operand_type=STRING_TYPE,
-        apply=lambda query, value: query.where(DbDicomArchive.study_uid == value),
-    ),
-)
-DICOM_PATIENT_NAME = ObjectProperty[DicomArchiveObject, str, object](
-    name="patient-name",
-    value_type=STRING_TYPE,
-    get_value=lambda obj: obj.orm.patient_name,
-)
-DICOM_ACQUISITION_COUNT = ObjectProperty[DicomArchiveObject, int, object](
-    name="acquisition-count",
-    value_type=INTEGER_TYPE,
-    get_value=lambda obj: obj.orm.acquisition_count,
-)
-DicomArchiveObject.properties = (
-    DICOM_ID,
-    DICOM_STUDY_UID,
-    DICOM_PATIENT_NAME,
-    DICOM_ACQUISITION_COUNT,
-)
+def _session_targets(obj: DicomArchiveObject) -> tuple[ObjectRef, ...]:
+    return tuple(ObjectRef(SESSION.name, str(session_id)) for session_id in _session_ids(obj))
 
 
-DICOM_ARCHIVE = ObjectKind("dicom-archive", DicomArchiveObject)
-DICOM_ARCHIVE_SESSION = session_relationship(
-    name="dicom-archive-belongs-to-session",
-    source_kind=DICOM_ARCHIVE.name,
-)
-DICOM_ARCHIVE_SESSION_BINDING = RelationshipBinding[DicomArchiveObject](
-    kind=DICOM_ARCHIVE_SESSION,
-    targets_for_source=lambda obj: obj.session_refs(),
-    source_selection=lambda refs: ObjectSelection(
+def _session_source_selection(refs: frozenset[ObjectRef]) -> ObjectSelection[Any]:
+    return ObjectSelection(
         constraints=(
             SelectionConstraint(
                 lambda query: _filter_by_session_ids(query, _target_ids(refs, SESSION.name))
             ),
         )
+    )
+
+
+DICOM_ARCHIVE_SESSION = session_link(
+    source_kind=DICOM_ARCHIVE_KIND,
+    targets_for_source=_session_targets,
+    source_selection=_session_source_selection,
+)
+DICOM_ARCHIVE_ROW = LinkMember[DicomArchiveObject](
+    name="row",
+    source_kind=DICOM_ARCHIVE_KIND,
+    target_kind=DATABASE_ROW_KIND,
+    targets_for_source=lambda obj: (DatabaseRowObject(obj.orm),),
+    lifecycle=LifecycleSemantics.OWNS,
+)
+DICOM_ARCHIVE_SERIES_ROWS = LinkMember[DicomArchiveObject](
+    name="series-row",
+    source_kind=DICOM_ARCHIVE_KIND,
+    target_kind=DATABASE_ROW_KIND,
+    targets_for_source=lambda obj: tuple(DatabaseRowObject(row) for row in obj.orm.series),
+    lifecycle=LifecycleSemantics.OWNS,
+)
+DICOM_ARCHIVE_FILE_ROWS = LinkMember[DicomArchiveObject](
+    name="file-row",
+    source_kind=DICOM_ARCHIVE_KIND,
+    target_kind=DATABASE_ROW_KIND,
+    targets_for_source=lambda obj: tuple(DatabaseRowObject(row) for row in obj.orm.files),
+    lifecycle=LifecycleSemantics.OWNS,
+)
+DICOM_ARCHIVE_UPLOAD_ROWS = LinkMember[DicomArchiveObject](
+    name="upload-row",
+    source_kind=DICOM_ARCHIVE_KIND,
+    target_kind=DATABASE_ROW_KIND,
+    targets_for_source=lambda obj: tuple(DatabaseRowObject(row) for row in obj.orm.mri_uploads),
+    lifecycle=LifecycleSemantics.REFERENCES,
+)
+DICOM_ARCHIVE_FILE = LinkMember[DicomArchiveObject](
+    name="file",
+    source_kind=DICOM_ARCHIVE_KIND,
+    target_kind=LOCAL_PATH_KIND,
+    targets_for_source=lambda obj: (
+        (
+            LocalPathObject(
+                storage_root="dicom-archive",
+                relative_path=PurePosixPath(obj.orm.path.as_posix()),
+                expected_type=LocalPathType.FILE,
+            ),
+        )
+        if obj.orm.path is not None
+        else ()
+    ),
+    lifecycle=LifecycleSemantics.OWNS,
+)
+
+DICOM_ARCHIVE = ObjectKind(
+    DICOM_ARCHIVE_KIND,
+    DicomArchiveObject,
+    (
+        DICOM_ID,
+        DICOM_STUDY_UID,
+        DICOM_PATIENT_NAME,
+        DICOM_ACQUISITION_COUNT,
+        DICOM_ARCHIVE_SESSION,
+        DICOM_ARCHIVE_ROW,
+        DICOM_ARCHIVE_SERIES_ROWS,
+        DICOM_ARCHIVE_FILE_ROWS,
+        DICOM_ARCHIVE_UPLOAD_ROWS,
+        DICOM_ARCHIVE_FILE,
     ),
 )
 
 
 class DicomArchiveProvider:
-    """Resolve DICOM archives, including their subordinate ORM rows and archive path."""
-
     kind = DICOM_ARCHIVE
 
     def find(
@@ -159,8 +217,10 @@ class DicomArchiveProvider:
         keys = selection.keys_for(DICOM_ARCHIVE.name)
         if keys is not None:
             statement = statement.where(DbDicomArchive.id.in_(_integer_keys(keys, DICOM_ARCHIVE.name)))
-        statement = selection.apply_filters(statement, DicomArchiveObject.properties)
-
+        properties = tuple(
+            member for member in DICOM_ARCHIVE.members if isinstance(member, ValueMember)
+        )
+        statement = selection.apply_filters(statement, properties)
         return tuple(DicomArchiveObject(row) for row in db.scalars(statement))
 
 
@@ -179,9 +239,6 @@ def _target_ids(refs: frozenset[ObjectRef], kind: str) -> frozenset[int]:
 
 
 def register_dicom_schema(schema: ResourceSchema) -> None:
-    """Extend a core resource schema with DICOM concepts."""
-
+    schema.register_object_kind(LOCAL_PATH)
     schema.register_object_kind(DICOM_ARCHIVE)
-    schema.register_relationship_kind(DICOM_ARCHIVE_SESSION)
     schema.register_provider(DicomArchiveProvider())
-    schema.register_relationship_binding(DICOM_ARCHIVE_SESSION_BINDING)

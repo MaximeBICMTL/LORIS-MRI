@@ -1,33 +1,57 @@
-"""Read-only inspection of logical LORIS objects and their bound resources."""
+"""Read-only inspection of logical and physical LORIS resource objects."""
 
 import json
+import stat
+from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from lib.resource_model.graph import ResourceGraph
+from lib.resource_model.graph import GraphFragment, ResourceGraph
 from lib.resource_model.provider import ResourceModel, ResourceSchema
-from lib.resource_model.providers.core import (
-    PROJECT,
-    SESSION,
-    SITE,
-    register_core_schema,
-)
+from lib.resource_model.providers.core import PROJECT, SESSION, SITE, register_core_schema
 from lib.resource_model.providers.dicom import register_dicom_schema
-from lib.resource_model.resources import DatabaseRowObject, LocalPathObject, ResourceObject
-from lib.resource_model.schema import (
-    LogicalObject,
+from lib.resource_model.resources import (
+    DatabaseRowObject,
+    LocalPathObject,
+    LocalPathType,
     ObjectRef,
+    PhysicalObject,
+    ResourceObject,
+    ResourceRef,
+)
+from lib.resource_model.schema import (
     PropertyCriterion,
     PropertyPath,
-    Relationship,
+    PropertyReadContext,
 )
 
 
 @dataclass(frozen=True, slots=True)
-class InspectionSelection:
-    """A whole logical object kind or one property to project."""
+class FilesystemPropertyReadContext(PropertyReadContext):
+    """Resolve observed local-path properties through configured storage roots."""
 
+    storage_roots: Mapping[str, Path]
+
+    def local_path_size(self, obj: LocalPathObject) -> int:
+        try:
+            root = self.storage_roots[obj.storage_root]
+        except KeyError as error:
+            raise ValueError(f"No path is configured for storage root {obj.storage_root!r}") from error
+        path = root / obj.relative_path
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode):
+            raise ValueError(f"Symlink inspection is not supported for {obj.ref}")
+        if obj.expected_type is LocalPathType.FILE and not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(f"Expected a file at {obj.ref}")
+        if obj.expected_type is LocalPathType.DIRECTORY and not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError(f"Expected a directory at {obj.ref}")
+        return metadata.st_size
+
+
+@dataclass(frozen=True, slots=True)
+class InspectionSelection:
     expression: str
     target_kind: str
     property_path: PropertyPath | None = None
@@ -39,8 +63,6 @@ class InspectionSelection:
 
 @dataclass(frozen=True, slots=True)
 class InspectionQuery:
-    """Object/property projections and qualified criteria accepted by the inspector."""
-
     selections: tuple[InspectionSelection, ...]
     criteria: tuple[PropertyCriterion, ...] = ()
     select_all: bool = False
@@ -55,65 +77,53 @@ class InspectionQuery:
 
 @dataclass(frozen=True, slots=True)
 class InspectionResult:
+    schema: ResourceSchema
+    read_context: PropertyReadContext
     graph: ResourceGraph
-    selected: frozenset[ObjectRef]
-    projections: tuple[tuple[InspectionSelection, frozenset[ObjectRef]], ...]
+    selected: frozenset[ResourceRef]
+    projections: tuple[tuple[InspectionSelection, frozenset[ResourceRef]], ...]
 
 
-def inspect_resources(db: Session, query: InspectionQuery) -> InspectionResult:
-    """Resolve objects and resources selected by a read-only inspection query."""
-
+def inspect_resources(
+    db: Session,
+    query: InspectionQuery,
+    *,
+    storage_roots: Mapping[str, Path] | None = None,
+) -> InspectionResult:
     schema = make_resource_schema()
     model = ResourceModel(schema)
     graph = ResourceGraph()
-    selected: set[ObjectRef] = set()
+    selected: set[ResourceRef] = set()
     anchor_kind = _anchor_kind(query)
     anchor_fragment = model.select_objects(db, anchor_kind, criteria=query.criteria)
-    anchor_refs = frozenset(
-        logical_object.ref for logical_object in anchor_fragment.logical_objects
-    )
-    projections: list[tuple[InspectionSelection, frozenset[ObjectRef]]] = []
+    anchor_refs = frozenset(obj.ref for obj in anchor_fragment.logical_objects)
+    projections: list[tuple[InspectionSelection, frozenset[ResourceRef]]] = []
 
     for selection in query.selections:
-        target_refs = _project_refs(db, schema, model, anchor_kind, anchor_refs, selection)
-        target_fragment = model.select_objects(db, selection.target_kind, refs=target_refs)
-        graph.add(target_fragment)
-        projected_refs = frozenset(
-            logical_object.ref for logical_object in target_fragment.logical_objects
-        )
+        if schema.has_provider(selection.target_kind):
+            target_refs = _project_logical_refs(
+                db, schema, model, anchor_kind, anchor_refs, selection
+            )
+            target_fragment = model.select_objects(db, selection.target_kind, refs=target_refs)
+            graph.add(target_fragment)
+            projected_refs: frozenset[ResourceRef] = frozenset(
+                obj.ref for obj in target_fragment.logical_objects
+            )
+        else:
+            physical_objects = _project_physical_objects(
+                db, schema, model, anchor_fragment, selection
+            )
+            graph.add(GraphFragment(physical_objects=physical_objects))
+            projected_refs = frozenset(obj.ref for obj in physical_objects)
         selected.update(projected_refs)
         projections.append((selection, projected_refs))
 
     if query.expand_related:
-        missing_session_ids = frozenset(int(ref.key) for ref in graph.unresolved_refs() if ref.kind == SESSION.name)
-        if missing_session_ids:
-            graph.add(
-                model.select_objects(
-                    db,
-                    SESSION.name,
-                    refs=_refs(SESSION.name, missing_session_ids),
-                )
-            )
-        missing_project_ids = frozenset(int(ref.key) for ref in graph.unresolved_refs() if ref.kind == PROJECT.name)
-        if missing_project_ids:
-            graph.add(
-                model.select_objects(
-                    db,
-                    PROJECT.name,
-                    refs=_refs(PROJECT.name, missing_project_ids),
-                )
-            )
-        missing_site_ids = frozenset(int(ref.key) for ref in graph.unresolved_refs() if ref.kind == SITE.name)
-        if missing_site_ids:
-            graph.add(
-                model.select_objects(
-                    db,
-                    SITE.name,
-                    refs=_refs(SITE.name, missing_site_ids),
-                )
-            )
+        _expand_related(db, model, graph)
 
     return InspectionResult(
+        schema=schema,
+        read_context=FilesystemPropertyReadContext(storage_roots or {}),
         graph=graph,
         selected=frozenset(selected),
         projections=tuple(projections),
@@ -121,36 +131,27 @@ def inspect_resources(db: Session, query: InspectionQuery) -> InspectionResult:
 
 
 def parse_inspection_selection(schema: ResourceSchema, expression: str) -> InspectionSelection:
-    """Parse a whole-object or property projection through the resource schema."""
-
     expression = expression.strip()
-    object_kinds = {kind.name for kind in schema.object_kinds}
-    if expression in object_kinds:
+    selectable_kinds = {kind.name for kind in schema.object_kinds if schema.has_provider(kind.name)}
+    if expression in selectable_kinds:
         return InspectionSelection(expression=expression, target_kind=expression)
     path = schema.property_path(expression)
-    return InspectionSelection(
-        expression=expression,
-        target_kind=path.property.object_kind,
-        property_path=path,
-    )
+    return InspectionSelection(expression, path.property.object_kind, path)
 
 
 def _anchor_kind(query: InspectionQuery) -> str:
-    selection_roots = {
+    roots = {
         selection.property_path.root_kind
         if selection.property_path is not None
         else selection.target_kind
         for selection in query.selections
     }
-    if len(selection_roots) != 1:
-        raise ValueError(
-            f"All --select expressions must currently share one root kind; "
-            f"got {sorted(selection_roots)}"
-        )
-    return next(iter(selection_roots))
+    if len(roots) != 1:
+        raise ValueError(f"All --select expressions must currently share one root kind; got {sorted(roots)}")
+    return next(iter(roots))
 
 
-def _project_refs(
+def _project_logical_refs(
     db: Session,
     schema: ResourceSchema,
     model: ResourceModel,
@@ -159,134 +160,114 @@ def _project_refs(
     selection: InspectionSelection,
 ) -> frozenset[ObjectRef]:
     path = selection.property_path
-    if path is not None and path.relationship_members:
+    if path is not None and path.link_members:
         if path.root_kind != anchor_kind:
-            raise ValueError(
-                f"Explicit selection path {path} must start at query anchor {anchor_kind!r}"
-            )
-        steps = tuple((binding, True) for binding in schema.path_bindings(path))
+            raise ValueError(f"Explicit selection path {path} must start at query anchor {anchor_kind!r}")
+        steps = tuple((link, True) for link in schema.path_links(path))
     else:
         steps = schema.belongs_to_connection(anchor_kind, selection.target_kind)
     return model.traverse_refs(db, anchor_refs, steps)
 
 
-def make_resource_schema() -> ResourceSchema:
-    """Build the resource schema used by the proof-of-concept inspector."""
+def _project_physical_objects(
+    db: Session,
+    schema: ResourceSchema,
+    model: ResourceModel,
+    anchor_fragment: GraphFragment,
+    selection: InspectionSelection,
+) -> tuple[PhysicalObject, ...]:
+    path = selection.property_path
+    if path is None or not path.link_members:
+        raise ValueError(f"Physical object kind {selection.target_kind!r} requires an explicit path")
+    current: tuple[ResourceObject, ...] = anchor_fragment.logical_objects
+    for link in schema.path_links(path):
+        targets = tuple(target for obj in current for target in link.targets_for_source(obj))
+        logical_refs = frozenset(target for target in targets if isinstance(target, ObjectRef))
+        physical = tuple(target for target in targets if not isinstance(target, ObjectRef))
+        if logical_refs and physical:
+            raise ValueError(f"Link {link.source_kind}.{link.name} returned mixed target families")
+        if logical_refs:
+            fragment = model.select_objects(db, link.target_kind, refs=logical_refs)
+            current = fragment.logical_objects
+        else:
+            current = physical
+    return tuple(
+        obj for obj in current if isinstance(obj, (DatabaseRowObject, LocalPathObject))
+    )
 
+
+def _expand_related(db: Session, model: ResourceModel, graph: ResourceGraph) -> None:
+    for kind in (SESSION, PROJECT, SITE):
+        keys = frozenset(int(ref.key) for ref in graph.unresolved_refs() if ref.kind == kind.name)
+        if keys:
+            graph.add(model.select_objects(db, kind.name, refs=_refs(kind.name, keys)))
+
+
+def make_resource_schema() -> ResourceSchema:
     schema = ResourceSchema()
     register_core_schema(schema)
     register_dicom_schema(schema)
     return schema
 
 
-def _refs(kind: str, keys: frozenset[int] | None) -> frozenset[ObjectRef] | None:
-    if keys is None:
-        return None
+def _refs(kind: str, keys: frozenset[int]) -> frozenset[ObjectRef]:
     return frozenset(ObjectRef(kind, str(key)) for key in keys)
 
 
 def format_inspection_text(result: InspectionResult) -> str:
-    """Render an inspection result for a terminal."""
-
     if not result.selected:
-        return "No matching logical objects."
-
+        return "No matching objects."
     lines = [
-        f"Selected {len(result.selected)} logical object(s); resolved {len(result.graph.objects)} object(s) in total."
+        f"Selected {len(result.selected)} object(s); resolved {len(result.graph.objects)} object(s) in total."
     ]
-    objects = sorted(result.graph.logical_objects, key=lambda item: str(item.ref))
-    for logical_object in objects:
-        role = "selected" if logical_object.ref in result.selected else "related"
-        lines.extend(("", f"{logical_object.ref} [{role}]", "  Properties:"))
-        selected_property_names = _selected_property_names(result, logical_object.ref)
-        for property_definition in logical_object.properties:
-            if (
-                selected_property_names is not None
-                and property_definition.name not in selected_property_names
-            ):
-                continue
-            value = property_definition.get_value(logical_object)
-            lines.append(f"    {property_definition.name}: {value}")
-
-        if selected_property_names is not None:
-            continue
-
-        lines.append("  Resources:")
-        bound_resources = _bound_resources(result.graph, logical_object)
-        if not bound_resources:
-            lines.append("    (none)")
-        for semantics, resource in bound_resources:
-            if isinstance(resource, DatabaseRowObject):
-                key = ", ".join(f"{name}={value}" for name, value in resource.ref.key)
-                lines.append(
-                    f"    {semantics}: database row: {resource.ref.table.fullname} ({key})"
-                )
-            elif isinstance(resource, LocalPathObject):
-                lines.append(
-                    f"    {semantics}: local {resource.expected_type}: "
-                    f"{resource.storage_root}:{resource.relative_path}"
-                )
-            else:
-                raise TypeError(f"Unsupported physical resource object {resource!r}")
-
-        relationships = sorted(
-            _object_relationships(result.graph, logical_object),
-            key=lambda item: (item.kind, item.source, item.target),
-        )
-        lines.append("  Relationships:")
-        if not relationships:
-            lines.append("    (none)")
-        for relationship in relationships:
-            direction = "->" if relationship.source == logical_object.ref else "<-"
-            other = relationship.target if direction == "->" else relationship.source
-            resolved = "resolved" if result.graph.get(other) is not None else "unresolved"
-            lines.append(f"    {direction} {relationship.kind}: {other} [{resolved}]")
-
+    for obj in sorted(_visible_objects(result), key=lambda item: str(item.ref)):
+        role = "selected" if obj.ref in result.selected else "related"
+        lines.extend(("", f"{obj.ref} [{role}]", "  Properties:"))
+        for member in _displayed_properties(result, obj):
+            lines.append(f"    {member.name}: {member.get_value(obj, result.read_context)}")
+        links = tuple(link for link in result.graph.links if link.source == obj.ref)
+        if links:
+            lines.append("  Links:")
+            for link in sorted(links, key=lambda item: str(item.member)):
+                definition = result.schema.link(link.member.object_kind, link.member.property_name)
+                metadata = definition.lifecycle.value if definition.lifecycle is not None else "link"
+                lines.append(f"    {link.member.property_name} [{metadata}] -> {link.target}")
     return "\n".join(lines)
 
 
 def format_inspection_json(result: InspectionResult) -> str:
-    """Render a stable machine-readable representation of an inspection result."""
-
-    objects = sorted(result.graph.logical_objects, key=lambda item: str(item.ref))
     document = {
-        "selected": [str(ref) for ref in sorted(result.selected)],
+        "selected": [str(ref) for ref in sorted(result.selected, key=str)],
         "selections": [
             {
                 "expression": selection.expression,
                 "property": selection.property_name,
-                "objects": [str(ref) for ref in sorted(refs)],
+                "objects": [str(ref) for ref in sorted(refs, key=str)],
             }
             for selection, refs in result.projections
         ],
         "objects": [
-            {
-                "id": str(logical_object.ref),
-                "kind": logical_object.ref.kind,
-                "key": logical_object.ref.key,
-                "role": "selected" if logical_object.ref in result.selected else "related",
-                "properties": _property_document(result, logical_object),
-                "resources": (
-                    [
-                        {"semantics": str(semantics), **_resource_document(resource)}
-                        for semantics, resource in _bound_resources(result.graph, logical_object)
-                    ]
-                    if _selected_property_names(result, logical_object.ref) is None
-                    else []
-                ),
-            }
-            for logical_object in objects
+            _object_document(result, obj)
+            for obj in sorted(_visible_objects(result), key=lambda item: str(item.ref))
         ],
-        "relationships": [
+        "links": [
             {
-                "kind": relationship.kind,
-                "source": str(relationship.source),
-                "target": str(relationship.target),
-                "target_resolved": result.graph.get(relationship.target) is not None,
+                "member": str(link.member),
+                "source": str(link.source),
+                "target": str(link.target),
+                "lifecycle": (
+                    definition.lifecycle.value
+                    if (definition := result.schema.link(
+                        link.member.object_kind, link.member.property_name
+                    )).lifecycle
+                    is not None
+                    else None
+                ),
+                "target_resolved": result.graph.get(link.target) is not None,
             }
-            for relationship in sorted(
-                result.graph.relationships,
-                key=lambda item: (item.kind, item.source, item.target),
+            for link in sorted(
+                result.graph.links,
+                key=lambda item: (str(item.member), str(item.source), str(item.target)),
             )
         ],
         "unresolved": [str(ref) for ref in sorted(result.graph.unresolved_refs())],
@@ -294,75 +275,41 @@ def format_inspection_json(result: InspectionResult) -> str:
     return json.dumps(document, indent=2, default=str)
 
 
-def _object_relationships(graph: ResourceGraph, logical_object: LogicalObject) -> tuple[Relationship, ...]:
-    return tuple(
-        relationship
-        for relationship in graph.relationships
-        if logical_object.ref in (relationship.source, relationship.target)
+def _object_document(result: InspectionResult, obj: ResourceObject) -> dict[str, object]:
+    kind = result.schema.kind_for_object(obj)
+    document: dict[str, object] = {
+        "id": str(obj.ref),
+        "kind": kind.name,
+        "role": "selected" if obj.ref in result.selected else "related",
+        "properties": {
+            member.name: member.get_value(obj, result.read_context)
+            for member in _displayed_properties(result, obj)
+        },
+    }
+    if isinstance(obj.ref, ObjectRef):
+        document["key"] = obj.ref.key
+    if isinstance(obj, DatabaseRowObject):
+        document.update(table=obj.ref.table.fullname, key=dict(obj.ref.key))
+    return document
+
+
+def _visible_objects(result: InspectionResult) -> tuple[ResourceObject, ...]:
+    return (
+        *result.graph.logical_objects,
+        *(obj for obj in result.graph.physical_objects if obj.ref in result.selected),
     )
 
 
-def _selected_property_names(
-    result: InspectionResult,
-    ref: ObjectRef,
-) -> frozenset[str] | None:
-    """Return a property projection, or None for whole/related objects."""
+def _displayed_properties(result: InspectionResult, obj: ResourceObject):
+    properties = result.schema.properties(result.schema.kind_for_object(obj).name)
+    selected_names = _selected_property_names(result, obj.ref)
+    return tuple(
+        member for member in properties if selected_names is None or member.name in selected_names
+    )
 
-    matching = [
-        selection
-        for selection, refs in result.projections
-        if ref in refs
-    ]
+
+def _selected_property_names(result: InspectionResult, ref: ResourceRef) -> frozenset[str] | None:
+    matching = [selection for selection, refs in result.projections if ref in refs]
     if not matching or any(selection.property_name is None for selection in matching):
         return None
-    return frozenset(
-        selection.property_name
-        for selection in matching
-        if selection.property_name is not None
-    )
-
-
-def _property_document(
-    result: InspectionResult,
-    logical_object: LogicalObject,
-) -> dict[str, object]:
-    selected_names = _selected_property_names(result, logical_object.ref)
-    return {
-        property_definition.name: property_definition.get_value(logical_object)
-        for property_definition in logical_object.properties
-        if selected_names is None or property_definition.name in selected_names
-    }
-
-
-def _bound_resources(
-    graph: ResourceGraph,
-    logical_object: LogicalObject,
-) -> tuple[tuple[str, ResourceObject], ...]:
-    resources: list[tuple[str, ResourceObject]] = []
-    for binding in graph.resource_bindings:
-        if binding.source != logical_object.ref:
-            continue
-        resource = graph.get(binding.target)
-        if resource is None:
-            raise ValueError(f"Unresolved physical resource {binding.target}")
-        resources.append((binding.semantics.value, resource))
-    return tuple(sorted(resources, key=lambda item: str(item[1].ref)))
-
-
-def _resource_document(resource: ResourceObject) -> dict[str, object]:
-    if isinstance(resource, DatabaseRowObject):
-        return {
-            "type": "database_row",
-            "id": str(resource.ref),
-            "table": resource.ref.table.fullname,
-            "key": dict(resource.ref.key),
-        }
-    if not isinstance(resource, LocalPathObject):
-        raise TypeError(f"Unsupported physical resource object {resource!r}")
-    return {
-        "type": "local_path",
-        "id": str(resource.ref),
-        "storage_root": resource.storage_root,
-        "path": str(resource.relative_path),
-        "expected_type": resource.expected_type,
-    }
+    return frozenset(selection.property_name for selection in matching if selection.property_name)

@@ -16,23 +16,23 @@ from lib.db.models.session import DbSession
 from lib.db.models.site import DbSite
 from lib.resource_model import (
     STRING_TYPE,
-    BoundResource,
     DatabaseRowObject,
+    LifecycleSemantics,
+    LinkMember,
     LocalPathObject,
     LocalPathType,
     ObjectKind,
-    ObjectProperty,
     ObjectRef,
     ObjectSelection,
     PropertyRef,
-    RelationshipKind,
     RelationshipSemantics,
-    ResourceBindingSemantics,
     ResourceGraph,
     ResourceModel,
     ResourceSchema,
+    ValueMember,
 )
 from lib.resource_model.inspection import (
+    FilesystemPropertyReadContext,
     InspectionQuery,
     format_inspection_json,
     format_inspection_text,
@@ -56,6 +56,8 @@ from lib.resource_model.providers.dicom import (
 )
 from scripts.inspect_resources import main as inspect_main
 from scripts.inspect_resources import make_parser, parse_where_expressions
+
+READ_CONTEXT = FilesystemPropertyReadContext({})
 
 
 def make_schema() -> ResourceSchema:
@@ -150,7 +152,10 @@ def test_resolves_typed_logical_object_with_database_and_file_resources(db: Sess
     assert isinstance(logical_object, DicomArchiveObject)
     assert logical_object.orm is archive
     assert logical_object.ref == ObjectRef(DICOM_ARCHIVE.name, str(archive.id))
-    values = {definition.name: definition.get_value(logical_object) for definition in logical_object.properties}
+    values = {
+        definition.name: definition.get_value(logical_object, READ_CONTEXT)
+        for definition in make_schema().properties(DICOM_ARCHIVE.name)
+    }
     assert values == {
         "id": archive.id,
         "study-uid": "1.2.3.4",
@@ -161,13 +166,15 @@ def test_resolves_typed_logical_object_with_database_and_file_resources(db: Sess
     assert sum(isinstance(obj, DatabaseRowObject) for obj in fragment.physical_objects) == 4
     assert sum(isinstance(obj, LocalPathObject) for obj in fragment.physical_objects) == 1
     assert sum(
-        binding.semantics is ResourceBindingSemantics.OWNS
-        for binding in fragment.resource_bindings
+        make_schema().link(binding.member.object_kind, binding.member.property_name).lifecycle
+        is LifecycleSemantics.OWNS
+        for binding in fragment.links
     ) == 4
     assert sum(
-        binding.semantics is ResourceBindingSemantics.REFERENCES
-        for binding in fragment.resource_bindings
-    ) == 1
+        make_schema().link(binding.member.object_kind, binding.member.property_name).lifecycle
+        is LifecycleSemantics.REFERENCES
+        for binding in fragment.links
+    ) == 2
     graph = ResourceGraph()
     graph.add(fragment)
     for physical_object in fragment.physical_objects:
@@ -183,7 +190,10 @@ def test_class_level_properties_read_and_query_orm_state(db: Session):
 
     archive.patient_name = "corrected-name"
 
-    values = {definition.name: definition.get_value(logical_object) for definition in logical_object.properties}
+    values = {
+        definition.name: definition.get_value(logical_object, READ_CONTEXT)
+        for definition in make_schema().properties(DICOM_ARCHIVE.name)
+    }
     assert values["patient-name"] == "corrected-name"
 
     matching = DicomArchiveProvider().find(
@@ -231,7 +241,7 @@ def test_composes_independently_resolved_provider_fragments(db: Session):
     assert len(graph.logical_objects) == 2
     assert len(graph.physical_objects) == 6
     assert len(graph.objects) == 8
-    assert len(graph.relationships) == 3
+    assert len(graph.links) == 9
 
 
 def test_schema_can_be_extended_without_modifying_core_types():
@@ -239,12 +249,11 @@ def test_schema_can_be_extended_without_modifying_core_types():
     class GeneticDatasetObject:
         id: int
         assay: str
-        bound_resources: tuple[BoundResource, ...] = ()
-        properties: ClassVar[tuple[ObjectProperty[Any, Any, Any], ...]] = (
-            ObjectProperty["GeneticDatasetObject", str, object](
+        properties: ClassVar[tuple[ValueMember[Any, Any, Any], ...]] = (
+            ValueMember["GeneticDatasetObject", str, object](
                 name="assay",
                 value_type=STRING_TYPE,
-                get_value=lambda obj: obj.assay,
+                get_value=lambda obj, _: obj.assay,
             ),
         )
 
@@ -253,13 +262,17 @@ def test_schema_can_be_extended_without_modifying_core_types():
             return ObjectRef("example.genetic-dataset", str(self.id))
 
     schema = make_schema()
-    schema.register_object_kind(ObjectKind("example.genetic-dataset", GeneticDatasetObject))
+    schema.register_object_kind(
+        ObjectKind("example.genetic-dataset", GeneticDatasetObject, GeneticDatasetObject.properties)
+    )
 
     assert {kind.name for kind in schema.object_kinds} == {
         "session",
         "project",
         "site",
         "dicom-archive",
+        "database-row",
+        "local-path",
         "example.genetic-dataset",
     }
 
@@ -289,9 +302,9 @@ def test_relationships_are_named_schema_members_not_properties():
         "visit-label",
         "active",
     }
-    assert schema.relationship(SESSION.name, "project").target_kind == PROJECT.name
-    assert schema.relationship(SESSION.name, "site").target_kind == SITE.name
-    assert schema.relationship(DICOM_ARCHIVE.name, "session").target_kind == SESSION.name
+    assert schema.link(SESSION.name, "project").target_kind == PROJECT.name
+    assert schema.link(SESSION.name, "site").target_kind == SITE.name
+    assert schema.link(DICOM_ARCHIVE.name, "session").target_kind == SESSION.name
 
 
 def test_schema_resolves_explicit_relationship_property_paths():
@@ -300,9 +313,9 @@ def test_schema_resolves_explicit_relationship_property_paths():
     path = schema.property_path("dicom-archive.session.project.name")
 
     assert path.root_kind == DICOM_ARCHIVE.name
-    assert path.relationship_members == ("session", "project")
+    assert path.link_members == ("session", "project")
     assert path.property == PropertyRef(PROJECT.name, "name")
-    assert tuple(binding.kind.member_name for binding in schema.path_bindings(path)) == (
+    assert tuple(link.name for link in schema.path_links(path)) == (
         "session",
         "project",
     )
@@ -388,15 +401,15 @@ def test_schema_rejects_relationships_with_unknown_endpoints():
     schema = ResourceSchema()
     register_core_schema(schema)
 
-    with pytest.raises(ValueError, match="unknown object kinds"):
-        schema.register_relationship_kind(
-            RelationshipKind(
-                name="unknown-belongs-to-session",
-                member_name="session",
-                source_kind="unknown",
-                target_kind="session",
-                semantics=RelationshipSemantics.BELONGS_TO,
-            )
+    with pytest.raises(ValueError, match="unknown target kind"):
+        schema.register_member(
+            SESSION.name,
+            LinkMember(
+                name="unknown",
+                source_kind=SESSION.name,
+                target_kind="unknown",
+                targets_for_source=lambda obj: (),
+            ),
         )
 
 
@@ -604,9 +617,38 @@ def test_property_selection_uses_its_root_as_anchor_for_independent_filters(db: 
             "key": str(archive.id),
             "role": "selected",
             "properties": {"study-uid": "1.2.3.4"},
-            "resources": [],
         }
     ]
+
+
+def test_inspection_projects_non_queryable_local_file_size(db: Session, tmp_path: Path):
+    archive = add_dicom_archive(db)
+    archive_path = tmp_path / "2026" / "archive.tar"
+    archive_path.parent.mkdir()
+    archive_path.write_bytes(b"dicom archive")
+
+    result = inspect_resources(
+        db,
+        InspectionQuery(
+            selections=(inspection_selection("dicom-archive.file.size"),),
+            criteria=parse_where_expressions((f"dicom-archive.id={archive.id}",)),
+        ),
+        storage_roots={"dicom-archive": tmp_path},
+    )
+
+    document = json.loads(format_inspection_json(result))
+    assert document["selected"] == ["local-path:dicom-archive:2026/archive.tar"]
+    assert document["objects"] == [
+        {
+            "id": "local-path:dicom-archive:2026/archive.tar",
+            "kind": "local-path",
+            "role": "selected",
+            "properties": {"size": len(b"dicom archive")},
+        }
+    ]
+
+    with pytest.raises(ValueError, match="not queryable"):
+        parse_where_expressions(("dicom-archive.file.size=1",))
 
 
 def test_where_parser_preserves_equals_signs_in_string_values():
@@ -635,14 +677,16 @@ def test_property_selection_does_not_implicitly_reverse_belongs_to(db: Session):
 def test_property_selection_rejects_ambiguous_belongs_to_paths(db: Session):
     add_dicom_archive(db)
     schema = make_schema()
-    schema.register_relationship_kind(
-        RelationshipKind(
-            name="example-dicom-belongs-to-project",
-            member_name="project",
+    schema.register_member(
+        DICOM_ARCHIVE.name,
+        LinkMember(
+            name="project",
             source_kind=DICOM_ARCHIVE.name,
             target_kind=PROJECT.name,
-            semantics=RelationshipSemantics.BELONGS_TO,
-        )
+            targets_for_source=lambda obj: (),
+            source_selection=lambda refs: ObjectSelection(),
+            traversal_semantics=RelationshipSemantics.BELONGS_TO,
+        ),
     )
 
     with pytest.raises(ValueError, match="Ambiguous belongs-to path"):
@@ -688,7 +732,7 @@ def test_dicom_inspection_does_not_display_scoping_sessions_without_matches(db: 
 
     assert result.selected == set()
     assert result.graph.objects == ()
-    assert format_inspection_text(result) == "No matching logical objects."
+    assert format_inspection_text(result) == "No matching objects."
 
 
 def test_inspection_can_expand_related_session_and_render_text_and_json(db: Session):
@@ -706,21 +750,22 @@ def test_inspection_can_expand_related_session_and_render_text_and_json(db: Sess
     text = format_inspection_text(result)
     assert f"dicom-archive:{archive.id} [selected]" in text
     assert "session:7 [related]" in text
-    assert "database row: tarchive" in text
-    assert "local file: dicom_archive:2026/archive.tar" in text
+    assert "row [owns] -> database-row:tarchive" in text
+    assert "file [owns] -> local-path:dicom-archive:2026/archive.tar" in text
 
     document = json.loads(format_inspection_json(result))
     assert document["selected"] == [f"dicom-archive:{archive.id}"]
     assert document["unresolved"] == []
     assert {item["role"] for item in document["objects"]} == {"selected", "related"}
-    archive_document = next(
-        item for item in document["objects"] if item["id"] == f"dicom-archive:{archive.id}"
-    )
-    assert {resource["semantics"] for resource in archive_document["resources"]} == {
+    archive_links = [
+        link
+        for link in document["links"]
+        if link["source"] == f"dicom-archive:{archive.id}"
+    ]
+    assert {link["lifecycle"] for link in archive_links} == {
         "owns",
         "references",
     }
-    assert all(resource["id"] for resource in archive_document["resources"])
 
 
 def test_inspection_requires_a_selector_unless_all_is_explicit():

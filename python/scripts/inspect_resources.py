@@ -4,11 +4,13 @@
 
 import argparse
 from collections.abc import Sequence
+from pathlib import Path
 
 from sqlalchemy.orm import Session
 
 from lib.config_file import load_config
 from lib.db.connect import get_database_engine
+from lib.db.queries.config import try_get_config_with_setting_name
 from lib.resource_model.inspection import (
     InspectionQuery,
     format_inspection_json,
@@ -75,7 +77,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     engine = get_database_engine(config.mysql)
     try:
         with Session(engine) as db:
-            result = inspect_resources(db, query)
+            storage_roots: dict[str, Path] = {}
+            if any(selection.expression == "dicom-archive.file.size" for selection in query.selections):
+                archive_root = try_get_config_with_setting_name(db, "tarchiveLibraryDir")
+                if archive_root is None or archive_root.value is None:
+                    parser.error("Missing tarchiveLibraryDir configuration for file inspection")
+                storage_roots["dicom-archive"] = Path(archive_root.value)
+            result = inspect_resources(db, query, storage_roots=storage_roots)
             formatter = format_inspection_json if args.format == "json" else format_inspection_text
             output = formatter(result)
     finally:
