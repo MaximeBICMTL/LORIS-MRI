@@ -12,16 +12,18 @@ from lib.db.models.dicom_archive import DbDicomArchive
 from lib.db.models.mri_upload import DbMriUpload
 from lib.resource_model.provider import ResourceSchema
 from lib.resource_model.providers.core import SESSION, session_relationship
-from lib.resource_model.resources import DatabaseRow, LocalPath, LocalPathType, Resource
+from lib.resource_model.resources import DatabaseRowObject, LocalPathObject, LocalPathType
 from lib.resource_model.schema import (
     INTEGER_TYPE,
     STRING_TYPE,
+    BoundResource,
     ObjectKind,
     ObjectProperty,
     ObjectRef,
     ObjectSelection,
     PropertyQuery,
     RelationshipBinding,
+    ResourceBindingSemantics,
     SelectionConstraint,
 )
 
@@ -38,19 +40,27 @@ class DicomArchiveObject:
         return ObjectRef(DICOM_ARCHIVE.name, str(self.orm.id))
 
     @property
-    def resources(self) -> tuple[Resource, ...]:
-        resources: list[Resource] = [
-            DatabaseRow.from_orm(self.orm),
-            *(DatabaseRow.from_orm(series) for series in self.orm.series),
-            *(DatabaseRow.from_orm(archive_file) for archive_file in self.orm.files),
-            *(DatabaseRow.from_orm(upload) for upload in self.orm.mri_uploads),
+    def bound_resources(self) -> tuple[BoundResource, ...]:
+        resources = [
+            BoundResource(DatabaseRowObject(self.orm)),
+            *(BoundResource(DatabaseRowObject(series)) for series in self.orm.series),
+            *(BoundResource(DatabaseRowObject(archive_file)) for archive_file in self.orm.files),
+            *(
+                BoundResource(
+                    DatabaseRowObject(upload),
+                    semantics=ResourceBindingSemantics.REFERENCES,
+                )
+                for upload in self.orm.mri_uploads
+            ),
         ]
         if self.orm.path is not None:
             resources.append(
-                LocalPath(
-                    storage_root="dicom_archive",
-                    relative_path=PurePosixPath(self.orm.path.as_posix()),
-                    path_type=LocalPathType.FILE,
+                BoundResource(
+                    LocalPathObject(
+                        storage_root="dicom_archive",
+                        relative_path=PurePosixPath(self.orm.path.as_posix()),
+                        expected_type=LocalPathType.FILE,
+                    )
                 )
             )
         return tuple(resources)

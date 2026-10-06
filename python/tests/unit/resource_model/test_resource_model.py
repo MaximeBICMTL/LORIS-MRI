@@ -16,8 +16,9 @@ from lib.db.models.session import DbSession
 from lib.db.models.site import DbSite
 from lib.resource_model import (
     STRING_TYPE,
-    DatabaseRow,
-    LocalPath,
+    BoundResource,
+    DatabaseRowObject,
+    LocalPathObject,
     LocalPathType,
     ObjectKind,
     ObjectProperty,
@@ -26,6 +27,7 @@ from lib.resource_model import (
     PropertyRef,
     RelationshipKind,
     RelationshipSemantics,
+    ResourceBindingSemantics,
     ResourceGraph,
     ResourceModel,
     ResourceSchema,
@@ -143,8 +145,8 @@ def test_resolves_typed_logical_object_with_database_and_file_resources(db: Sess
         ObjectSelection(refs=frozenset({ObjectRef(DICOM_ARCHIVE.name, str(archive.id))})),
     )
 
-    assert len(fragment.objects) == 1
-    logical_object = fragment.objects[0]
+    assert len(fragment.logical_objects) == 1
+    logical_object = fragment.logical_objects[0]
     assert isinstance(logical_object, DicomArchiveObject)
     assert logical_object.orm is archive
     assert logical_object.ref == ObjectRef(DICOM_ARCHIVE.name, str(archive.id))
@@ -155,8 +157,21 @@ def test_resolves_typed_logical_object_with_database_and_file_resources(db: Sess
         "patient-name": "DCC001_000001_V1",
         "acquisition-count": 1,
     }
-    assert sum(isinstance(resource, DatabaseRow) for resource in logical_object.resources) == 4
-    assert sum(isinstance(resource, LocalPath) for resource in logical_object.resources) == 1
+    assert len(fragment.physical_objects) == 5
+    assert sum(isinstance(obj, DatabaseRowObject) for obj in fragment.physical_objects) == 4
+    assert sum(isinstance(obj, LocalPathObject) for obj in fragment.physical_objects) == 1
+    assert sum(
+        binding.semantics is ResourceBindingSemantics.OWNS
+        for binding in fragment.resource_bindings
+    ) == 4
+    assert sum(
+        binding.semantics is ResourceBindingSemantics.REFERENCES
+        for binding in fragment.resource_bindings
+    ) == 1
+    graph = ResourceGraph()
+    graph.add(fragment)
+    for physical_object in fragment.physical_objects:
+        assert graph.get(physical_object.ref) is physical_object
 
 
 def test_class_level_properties_read_and_query_orm_state(db: Session):
@@ -213,7 +228,9 @@ def test_composes_independently_resolved_provider_fragments(db: Session):
         )
     )
     assert graph.unresolved_refs() == {ObjectRef(PROJECT.name, "3"), ObjectRef(SITE.name, "1")}
-    assert len(graph.objects) == 2
+    assert len(graph.logical_objects) == 2
+    assert len(graph.physical_objects) == 6
+    assert len(graph.objects) == 8
     assert len(graph.relationships) == 3
 
 
@@ -222,7 +239,7 @@ def test_schema_can_be_extended_without_modifying_core_types():
     class GeneticDatasetObject:
         id: int
         assay: str
-        resources: tuple[DatabaseRow | LocalPath, ...] = ()
+        bound_resources: tuple[BoundResource, ...] = ()
         properties: ClassVar[tuple[ObjectProperty[Any, Any, Any], ...]] = (
             ObjectProperty["GeneticDatasetObject", str, object](
                 name="assay",
@@ -385,19 +402,21 @@ def test_schema_rejects_relationships_with_unknown_endpoints():
 
 def test_local_paths_cannot_escape_their_storage_root():
     with pytest.raises(ValueError, match="within its storage root"):
-        LocalPath("data", PurePosixPath("../outside"), LocalPathType.FILE)
+        LocalPathObject("data", PurePosixPath("../outside"), LocalPathType.FILE)
 
 
 def test_database_resource_uses_orm_table_identity_and_predicate(db: Session):
     add_dicom_archive(db)
     session = db.get_one(DbSession, 7)
 
-    resource = DatabaseRow.from_orm(session)
+    resource = DatabaseRowObject(session)
+    ref = resource.ref
 
-    assert resource.table is DbSession.__table__
-    assert resource.identity == (7,)
-    assert resource.key == (("ID", 7),)
-    selected_id = db.execute(select(resource.table.c.ID).where(resource.predicate())).scalar_one()
+    assert resource.orm is session
+    assert ref.table is DbSession.__table__
+    assert ref.identity == (7,)
+    assert ref.key == (("ID", 7),)
+    selected_id = db.execute(select(ref.table.c.ID).where(ref.predicate())).scalar_one()
     assert selected_id == 7
 
 
@@ -412,7 +431,7 @@ def test_database_resource_rejects_a_transient_orm_instance():
     )
 
     with pytest.raises(ValueError, match="persistent"):
-        DatabaseRow.from_orm(transient_session)
+        DatabaseRowObject(transient_session).ref
 
 
 def test_inspection_composes_project_and_visit_selectors_across_providers(db: Session):
@@ -474,7 +493,7 @@ def test_project_and_site_properties_scope_sessions_without_leaking_scope_object
     )
 
     assert result.selected == {ObjectRef(SESSION.name, "7")}
-    assert {obj.ref for obj in result.graph.objects} == {ObjectRef(SESSION.name, "7")}
+    assert {obj.ref for obj in result.graph.logical_objects} == {ObjectRef(SESSION.name, "7")}
     assert result.graph.unresolved_refs() == {ObjectRef(PROJECT.name, "3"), ObjectRef(SITE.name, "1")}
 
 
@@ -493,7 +512,9 @@ def test_model_transitively_selects_dicom_by_belongs_to_properties(db: Session):
         ),
     )
 
-    assert {obj.ref for obj in fragment.objects} == {ObjectRef(DICOM_ARCHIVE.name, str(archive.id))}
+    assert {obj.ref for obj in fragment.logical_objects} == {
+        ObjectRef(DICOM_ARCHIVE.name, str(archive.id))
+    }
 
 
 def test_inspection_accepts_dynamic_qualified_property_criteria(db: Session):
@@ -645,7 +666,7 @@ def test_project_expansion_does_not_reverse_traverse_to_sessions(db: Session):
     )
 
     assert result.selected == {ObjectRef(PROJECT.name, "3")}
-    assert {obj.ref for obj in result.graph.objects} == result.selected
+    assert {obj.ref for obj in result.graph.logical_objects} == result.selected
 
 
 def test_dicom_inspection_does_not_display_scoping_sessions_without_matches(db: Session):
@@ -692,6 +713,14 @@ def test_inspection_can_expand_related_session_and_render_text_and_json(db: Sess
     assert document["selected"] == [f"dicom-archive:{archive.id}"]
     assert document["unresolved"] == []
     assert {item["role"] for item in document["objects"]} == {"selected", "related"}
+    archive_document = next(
+        item for item in document["objects"] if item["id"] == f"dicom-archive:{archive.id}"
+    )
+    assert {resource["semantics"] for resource in archive_document["resources"]} == {
+        "owns",
+        "references",
+    }
+    assert all(resource["id"] for resource in archive_document["resources"])
 
 
 def test_inspection_requires_a_selector_unless_all_is_explicit():

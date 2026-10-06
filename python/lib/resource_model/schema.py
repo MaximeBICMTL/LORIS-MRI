@@ -11,7 +11,7 @@ from typing import Any, ClassVar, Generic, Protocol, TypeVar
 
 from sqlalchemy.sql import Select
 
-from lib.resource_model.resources import Resource
+from lib.resource_model.resources import ObjectRef, PhysicalObject, PhysicalObjectRef, ResourceObject
 
 ObjectT = TypeVar("ObjectT")
 ValueT = TypeVar("ValueT")
@@ -120,17 +120,6 @@ class SelectionConstraint(Generic[ObjectT]):
 
 
 @dataclass(frozen=True, slots=True, order=True)
-class ObjectRef:
-    """Stable identity of one concrete logical-object instance."""
-
-    kind: str
-    key: str
-
-    def __str__(self) -> str:
-        return f"{self.kind}:{self.key}"
-
-
-@dataclass(frozen=True, slots=True, order=True)
 class PropertyRef:
     """Stable qualified name of a semantic object property."""
 
@@ -215,8 +204,8 @@ class ObjectSelection(Generic[ObjectT]):
         return statement
 
 
-class ResourceObject(Protocol):
-    """Common surface implemented by session-bound logical objects."""
+class LogicalObject(ResourceObject, Protocol):
+    """Session-bound semantic object exposed through the registered schema."""
 
     properties: ClassVar[tuple[ObjectProperty[Any, Any, Any], ...]]
 
@@ -224,7 +213,31 @@ class ResourceObject(Protocol):
     def ref(self) -> ObjectRef: ...
 
     @property
-    def resources(self) -> tuple[Resource, ...]: ...
+    def bound_resources(self) -> tuple["BoundResource", ...]: ...
+
+
+class ResourceBindingSemantics(StrEnum):
+    """Minimal lifecycle meaning of a logical-to-physical object binding."""
+
+    OWNS = "owns"
+    REFERENCES = "references"
+
+
+@dataclass(frozen=True, slots=True)
+class BoundResource:
+    """A physical object discovered from a logical object and its lifecycle meaning."""
+
+    object: PhysicalObject
+    semantics: ResourceBindingSemantics = ResourceBindingSemantics.OWNS
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceBinding:
+    """Concrete graph edge from a logical object to a physical object."""
+
+    source: ObjectRef
+    target: PhysicalObjectRef
+    semantics: ResourceBindingSemantics
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,7 +245,7 @@ class ObjectKind:
     """Schema definition for a kind of logical object."""
 
     name: str
-    object_type: type[ResourceObject]
+    object_type: type[LogicalObject]
 
 
 class RelationshipSemantics(StrEnum):

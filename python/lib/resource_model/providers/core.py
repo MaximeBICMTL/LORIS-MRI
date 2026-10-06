@@ -10,11 +10,12 @@ from lib.db.models.project import DbProject
 from lib.db.models.session import DbSession
 from lib.db.models.site import DbSite
 from lib.resource_model.provider import ResourceSchema
-from lib.resource_model.resources import DatabaseRow, Resource
+from lib.resource_model.resources import DatabaseRowObject
 from lib.resource_model.schema import (
     BOOLEAN_TYPE,
     INTEGER_TYPE,
     STRING_TYPE,
+    BoundResource,
     ObjectKind,
     ObjectProperty,
     ObjectRef,
@@ -39,8 +40,8 @@ class SessionObject:
         return ObjectRef(SESSION.name, str(self.orm.id))
 
     @property
-    def resources(self) -> tuple[Resource, ...]:
-        return (DatabaseRow.from_orm(self.orm),)
+    def bound_resources(self) -> tuple[BoundResource, ...]:
+        return (BoundResource(DatabaseRowObject(self.orm)),)
 
 
 SESSION_ID = ObjectProperty[SessionObject, int, int](
@@ -98,8 +99,8 @@ class ProjectObject:
         return ObjectRef(PROJECT.name, str(self.orm.id))
 
     @property
-    def resources(self) -> tuple[Resource, ...]:
-        return (DatabaseRow.from_orm(self.orm),)
+    def bound_resources(self) -> tuple[BoundResource, ...]:
+        return (BoundResource(DatabaseRowObject(self.orm)),)
 
 
 PROJECT_ID = ObjectProperty[ProjectObject, int, int](
@@ -151,8 +152,8 @@ class SiteObject:
         return ObjectRef(SITE.name, str(self.orm.id))
 
     @property
-    def resources(self) -> tuple[Resource, ...]:
-        return (DatabaseRow.from_orm(self.orm),)
+    def bound_resources(self) -> tuple[BoundResource, ...]:
+        return (BoundResource(DatabaseRowObject(self.orm)),)
 
 
 SITE_ID = ObjectProperty[SiteObject, int, int](

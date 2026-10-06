@@ -13,9 +13,10 @@ design can be tested through a useful vertical slice.
 ## Design direction
 
 - Keep SQLAlchemy as the database-row model; do not build a replacement ORM.
-- Treat `ObjectRef` as session-independent, but resolved logical objects as short-lived wrappers
-  around ORM instances belonging to the current SQLAlchemy session. Derive their properties and
-  resources from those instances instead of copying ORM state into a parallel snapshot.
+- Treat object references as session-independent, but resolved logical and database-row objects as
+  short-lived wrappers around ORM instances belonging to the current SQLAlchemy session. Derive
+  their properties and resource bindings from those instances instead of copying ORM state into a
+  parallel snapshot.
 - Keep the SQLAlchemy session open while consuming resolved objects. Providers should eager-load
   the relationships that define a logical object; do not add a separate resource context until a
   concrete use case requires multiple sessions or non-database services.
@@ -50,9 +51,18 @@ design can be tested through a useful vertical slice.
   `SessionObject` and `DicomArchiveObject`.
 - Keep modality-specific discovery in typed providers. The common layer owns graph composition,
   validation, planning, and eventually execution.
-- Model concrete database rows and storage-root-relative paths as resources. Database resources
-  should retain SQLAlchemy `Table` metadata and derive identities from persistent ORM instances;
-  do not duplicate physical table or primary-key names as unchecked strings in providers.
+- Represent logical objects, concrete database rows, and storage-root-relative paths as typed
+  objects in one heterogeneous resource graph. Keep logical objects as the semantic query boundary;
+  physical objects do not automatically become semantic-schema kinds or properties.
+- Use generic `DatabaseRowObject[ModelT]` wrappers around persistent ORM instances and derive
+  session-independent `DatabaseRowRef` identities from SQLAlchemy `Table` metadata and mapper
+  identity. Do not duplicate physical table or primary-key names as unchecked strings in providers.
+- Represent both local files and directories with `LocalPathObject`, using `expected_type` to record
+  what the provider expects without claiming that current filesystem state has been verified.
+  Symlink discovery and handling are deferred until filesystem revalidation is designed.
+- Connect logical objects to physical objects through explicit resource bindings. The initial
+  binding semantics are deliberately limited to `owns` and `references`; do not infer ownership
+  solely from foreign keys.
 - Make ownership, sharing, provenance, and deletion behavior explicit rather than inferring them
   solely from foreign keys.
 - Allow external LORIS modules to register namespaced kinds, relationships, resolvers, and policies.
@@ -70,7 +80,8 @@ The experimental code is under `python/lib/resource_model/`. It currently models
 - local DICOM archive paths;
 - DICOM-archive-to-session relationships;
 - session-to-project and session-to-site relationships;
-- typed concrete resource objects, generic selections, and composable partial resource graphs.
+- typed logical and physical resource objects, explicit resource bindings, generic selections, and
+  composable partial resource graphs.
 
 `python/scripts/inspect_resources.py` is a read-only CLI with text and JSON output. Repeatable
 `--select` expressions project whole logical objects or individual properties, while repeatable
@@ -92,6 +103,10 @@ leak into results unless selected or expanded as related context.
 
 Relationship expansion is intentionally outgoing only. Expanding a session resolves its shared
 project and site, while expanding a project or site does not implicitly enumerate every session.
+The current `--expand-related` behavior is a convenience of the inspection CLI for displaying
+related context; it is not required for property filtering, relationship-path traversal, or graph
+composition. Generalizing expansion across registered object kinds is therefore deferred until a
+consumer needs complete contextual graphs or configurable traversal.
 
 Important schema finding: current DICOM import code sets `tarchive.SessionID` to `NULL`; session
 association commonly comes through `mri_upload(TarchiveID, SessionID)`. Providers must account for
@@ -103,15 +118,20 @@ Prioritize proving the model through usable tools rather than growing an abstrac
 Likely next steps are:
 
 1. Improve the inspection/query API and provider registration model.
-2. Add a physiological-recording vertical slice to test shared resources, parent recordings,
-   sidecars, events, chunks, and directories.
-3. Define resource-binding semantics such as owned, shared, referenced, generated, and unmanaged.
-4. Define relationship traversal and operation policies separately from descriptive relationships.
-5. Extend property predicates beyond their current single filter operation when concrete querying
+2. Refine resource-binding semantics beyond the initial `owns` and `references` only when concrete
+   use cases require distinctions such as generated or unmanaged resources.
+3. Define relationship traversal and operation policies separately from descriptive relationships.
+4. Extend property predicates beyond their current single filter operation when concrete querying
    needs establish the operator model.
-6. Address graph completeness, stable identities, batching for large selections, plugin versioning,
+5. Address graph completeness, stable identities, batching for large selections, plugin versioning,
    database-row snapshots, and legacy absolute paths.
-7. Only then prototype deletion planning, SQL/filesystem backup, revalidation, and execution.
+6. Only then prototype deletion planning, SQL/filesystem backup, revalidation, and execution.
+
+A physiological-recording vertical slice is deliberately out of scope for this branch. The current
+SQL representation around electrodes, coordinate systems, and points is too convoluted to provide
+a clean test of the logical resource model. Simplify that database model separately before using
+physiological recordings to validate shared resources, parent recordings, sidecars, events, chunks,
+and directories.
 
 Do not assume that a foreign key or ORM relationship implies lifecycle ownership. Unknown or
 ambiguous relationships should fail closed for destructive operations.

@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from lib.resource_model.graph import GraphFragment
 from lib.resource_model.schema import (
+    BoundResource,
+    LogicalObject,
     ObjectKind,
     ObjectProperty,
     ObjectRef,
@@ -19,10 +21,10 @@ from lib.resource_model.schema import (
     RelationshipBinding,
     RelationshipKind,
     RelationshipSemantics,
-    ResourceObject,
+    ResourceBinding,
 )
 
-ObjectT = TypeVar("ObjectT", bound=ResourceObject)
+ObjectT = TypeVar("ObjectT", bound=LogicalObject)
 
 
 class ResourceProvider(Protocol[ObjectT]):
@@ -358,7 +360,24 @@ class ResourceModel:
         for relationship in relationships:
             self.schema.validate_relationship(relationship)
 
-        return GraphFragment(objects=objects, relationships=relationships)
+        bound_resources: tuple[tuple[ObjectRef, BoundResource], ...] = tuple(
+            (logical_object.ref, bound_resource)
+            for logical_object in objects
+            for bound_resource in logical_object.bound_resources
+        )
+        return GraphFragment(
+            logical_objects=objects,
+            physical_objects=tuple(bound.object for _, bound in bound_resources),
+            relationships=relationships,
+            resource_bindings=tuple(
+                ResourceBinding(
+                    source=source,
+                    target=bound.object.ref,
+                    semantics=bound.semantics,
+                )
+                for source, bound in bound_resources
+            ),
+        )
 
     def select_objects(
         self,
@@ -401,14 +420,14 @@ class ResourceModel:
             self.schema.provider(property_path.property.object_kind),
             ObjectSelection(predicates=(predicate,)),
         )
-        target_refs = frozenset(obj.ref for obj in target_fragment.objects)
+        target_refs = frozenset(obj.ref for obj in target_fragment.logical_objects)
         for binding in reversed(self.schema.path_bindings(property_path)):
             source_fragment = self.resolve(
                 db,
                 self.schema.provider(binding.kind.source_kind),
                 binding.source_selection(target_refs),
             )
-            target_refs = frozenset(obj.ref for obj in source_fragment.objects)
+            target_refs = frozenset(obj.ref for obj in source_fragment.logical_objects)
         if source_kind == property_path.root_kind:
             return target_refs
         implicit_path = self.schema.belongs_to_path(source_kind, property_path.root_kind)
@@ -418,7 +437,7 @@ class ResourceModel:
                 self.schema.provider(binding.kind.source_kind),
                 binding.source_selection(target_refs),
             )
-            target_refs = frozenset(obj.ref for obj in source_fragment.objects)
+            target_refs = frozenset(obj.ref for obj in source_fragment.logical_objects)
         return target_refs
 
     def traverse_refs(
@@ -439,7 +458,7 @@ class ResourceModel:
                 )
                 current_refs = frozenset(
                     target
-                    for logical_object in fragment.objects
+                    for logical_object in fragment.logical_objects
                     for target in binding.targets_for_source(logical_object)
                 )
             else:
@@ -448,5 +467,7 @@ class ResourceModel:
                     self.schema.provider(binding.kind.source_kind),
                     binding.source_selection(current_refs),
                 )
-                current_refs = frozenset(logical_object.ref for logical_object in fragment.objects)
+                current_refs = frozenset(
+                    logical_object.ref for logical_object in fragment.logical_objects
+                )
         return current_refs

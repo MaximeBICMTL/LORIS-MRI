@@ -1,9 +1,9 @@
-"""Physical resources bound to logical LORIS objects."""
+"""Concrete database and filesystem objects in the LORIS resource graph."""
 
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import TypeAlias, cast
+from typing import Any, Generic, Protocol, TypeAlias, TypeVar, cast
 
 from sqlalchemy import Table, and_, inspect
 from sqlalchemy.sql.elements import ColumnElement
@@ -12,15 +12,23 @@ from lib.db.base import Base
 
 DatabaseValue: TypeAlias = object
 DatabaseKey: TypeAlias = tuple[tuple[str, DatabaseValue], ...]
+ModelT = TypeVar("ModelT", bound=Base)
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class ObjectRef:
+    """Stable identity of one concrete semantic-object instance."""
+
+    kind: str
+    key: str
+
+    def __str__(self) -> str:
+        return f"{self.kind}:{self.key}"
 
 
 @dataclass(frozen=True, slots=True)
-class DatabaseRow:
-    """Schema-aware identity of one physical database row.
-
-    A deletion backup would later attach a typed snapshot of the row.  The PoC
-    intentionally records identity only.
-    """
+class DatabaseRowRef:
+    """Session-independent, schema-aware identity of one database row."""
 
     table: Table
     identity: tuple[DatabaseValue, ...]
@@ -34,8 +42,8 @@ class DatabaseRow:
             )
 
     @classmethod
-    def from_orm(cls, instance: Base) -> "DatabaseRow":
-        """Create a row identity from a persistent, single-table ORM instance."""
+    def from_orm(cls, instance: Base) -> "DatabaseRowRef":
+        """Create a reference from a persistent, single-table ORM instance."""
 
         state = inspect(instance)
         if state.identity is None:
@@ -64,6 +72,21 @@ class DatabaseRow:
         )
         return and_(*comparisons)
 
+    def __str__(self) -> str:
+        key = ",".join(f"{name}={value}" for name, value in self.key)
+        return f"database-row:{self.table.fullname}:{key}"
+
+
+@dataclass(frozen=True, slots=True)
+class DatabaseRowObject(Generic[ModelT]):
+    """Resolved database-row object backed by an ORM instance in the current session."""
+
+    orm: ModelT
+
+    @property
+    def ref(self) -> DatabaseRowRef:
+        return DatabaseRowRef.from_orm(self.orm)
+
 
 class LocalPathType(StrEnum):
     FILE = "file"
@@ -71,16 +94,43 @@ class LocalPathType(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class LocalPath:
-    """A path relative to a configured LORIS storage root."""
+class LocalPathRef:
+    """Stable identity of a path relative to a configured storage root."""
 
     storage_root: str
     relative_path: PurePosixPath
-    path_type: LocalPathType
 
     def __post_init__(self) -> None:
         if self.relative_path.is_absolute() or ".." in self.relative_path.parts:
             raise ValueError("A resource path must remain within its storage root")
 
+    def __str__(self) -> str:
+        return f"local-path:{self.storage_root}:{self.relative_path}"
 
-Resource = DatabaseRow | LocalPath
+
+@dataclass(frozen=True, slots=True)
+class LocalPathObject:
+    """Resolved local path with the filesystem type expected by its provider."""
+
+    storage_root: str
+    relative_path: PurePosixPath
+    expected_type: LocalPathType
+
+    def __post_init__(self) -> None:
+        LocalPathRef(self.storage_root, self.relative_path)
+
+    @property
+    def ref(self) -> LocalPathRef:
+        return LocalPathRef(self.storage_root, self.relative_path)
+
+
+PhysicalObjectRef: TypeAlias = DatabaseRowRef | LocalPathRef
+ResourceRef: TypeAlias = ObjectRef | PhysicalObjectRef
+PhysicalObject: TypeAlias = DatabaseRowObject[Any] | LocalPathObject
+
+
+class ResourceObject(Protocol):
+    """Small common surface shared by every object stored in a resource graph."""
+
+    @property
+    def ref(self) -> ResourceRef: ...

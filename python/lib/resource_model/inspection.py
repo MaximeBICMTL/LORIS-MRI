@@ -14,13 +14,13 @@ from lib.resource_model.providers.core import (
     register_core_schema,
 )
 from lib.resource_model.providers.dicom import register_dicom_schema
-from lib.resource_model.resources import DatabaseRow, LocalPath
+from lib.resource_model.resources import DatabaseRowObject, LocalPathObject, ResourceObject
 from lib.resource_model.schema import (
+    LogicalObject,
     ObjectRef,
     PropertyCriterion,
     PropertyPath,
     Relationship,
-    ResourceObject,
 )
 
 
@@ -69,14 +69,18 @@ def inspect_resources(db: Session, query: InspectionQuery) -> InspectionResult:
     selected: set[ObjectRef] = set()
     anchor_kind = _anchor_kind(query)
     anchor_fragment = model.select_objects(db, anchor_kind, criteria=query.criteria)
-    anchor_refs = frozenset(logical_object.ref for logical_object in anchor_fragment.objects)
+    anchor_refs = frozenset(
+        logical_object.ref for logical_object in anchor_fragment.logical_objects
+    )
     projections: list[tuple[InspectionSelection, frozenset[ObjectRef]]] = []
 
     for selection in query.selections:
         target_refs = _project_refs(db, schema, model, anchor_kind, anchor_refs, selection)
         target_fragment = model.select_objects(db, selection.target_kind, refs=target_refs)
         graph.add(target_fragment)
-        projected_refs = frozenset(logical_object.ref for logical_object in target_fragment.objects)
+        projected_refs = frozenset(
+            logical_object.ref for logical_object in target_fragment.logical_objects
+        )
         selected.update(projected_refs)
         projections.append((selection, projected_refs))
 
@@ -190,7 +194,7 @@ def format_inspection_text(result: InspectionResult) -> str:
     lines = [
         f"Selected {len(result.selected)} logical object(s); resolved {len(result.graph.objects)} object(s) in total."
     ]
-    objects = sorted(result.graph.objects, key=lambda item: item.ref)
+    objects = sorted(result.graph.logical_objects, key=lambda item: str(item.ref))
     for logical_object in objects:
         role = "selected" if logical_object.ref in result.selected else "related"
         lines.extend(("", f"{logical_object.ref} [{role}]", "  Properties:"))
@@ -208,14 +212,22 @@ def format_inspection_text(result: InspectionResult) -> str:
             continue
 
         lines.append("  Resources:")
-        if not logical_object.resources:
+        bound_resources = _bound_resources(result.graph, logical_object)
+        if not bound_resources:
             lines.append("    (none)")
-        for resource in logical_object.resources:
-            if isinstance(resource, DatabaseRow):
-                key = ", ".join(f"{name}={value}" for name, value in resource.key)
-                lines.append(f"    database row: {resource.table.fullname} ({key})")
+        for semantics, resource in bound_resources:
+            if isinstance(resource, DatabaseRowObject):
+                key = ", ".join(f"{name}={value}" for name, value in resource.ref.key)
+                lines.append(
+                    f"    {semantics}: database row: {resource.ref.table.fullname} ({key})"
+                )
+            elif isinstance(resource, LocalPathObject):
+                lines.append(
+                    f"    {semantics}: local {resource.expected_type}: "
+                    f"{resource.storage_root}:{resource.relative_path}"
+                )
             else:
-                lines.append(f"    local {resource.path_type}: {resource.storage_root}:{resource.relative_path}")
+                raise TypeError(f"Unsupported physical resource object {resource!r}")
 
         relationships = sorted(
             _object_relationships(result.graph, logical_object),
@@ -236,7 +248,7 @@ def format_inspection_text(result: InspectionResult) -> str:
 def format_inspection_json(result: InspectionResult) -> str:
     """Render a stable machine-readable representation of an inspection result."""
 
-    objects = sorted(result.graph.objects, key=lambda item: item.ref)
+    objects = sorted(result.graph.logical_objects, key=lambda item: str(item.ref))
     document = {
         "selected": [str(ref) for ref in sorted(result.selected)],
         "selections": [
@@ -255,7 +267,10 @@ def format_inspection_json(result: InspectionResult) -> str:
                 "role": "selected" if logical_object.ref in result.selected else "related",
                 "properties": _property_document(result, logical_object),
                 "resources": (
-                    [_resource_document(resource) for resource in logical_object.resources]
+                    [
+                        {"semantics": str(semantics), **_resource_document(resource)}
+                        for semantics, resource in _bound_resources(result.graph, logical_object)
+                    ]
                     if _selected_property_names(result, logical_object.ref) is None
                     else []
                 ),
@@ -279,7 +294,7 @@ def format_inspection_json(result: InspectionResult) -> str:
     return json.dumps(document, indent=2, default=str)
 
 
-def _object_relationships(graph: ResourceGraph, logical_object: ResourceObject) -> tuple[Relationship, ...]:
+def _object_relationships(graph: ResourceGraph, logical_object: LogicalObject) -> tuple[Relationship, ...]:
     return tuple(
         relationship
         for relationship in graph.relationships
@@ -309,7 +324,7 @@ def _selected_property_names(
 
 def _property_document(
     result: InspectionResult,
-    logical_object: ResourceObject,
+    logical_object: LogicalObject,
 ) -> dict[str, object]:
     selected_names = _selected_property_names(result, logical_object.ref)
     return {
@@ -319,16 +334,35 @@ def _property_document(
     }
 
 
-def _resource_document(resource: DatabaseRow | LocalPath) -> dict[str, object]:
-    if isinstance(resource, DatabaseRow):
+def _bound_resources(
+    graph: ResourceGraph,
+    logical_object: LogicalObject,
+) -> tuple[tuple[str, ResourceObject], ...]:
+    resources: list[tuple[str, ResourceObject]] = []
+    for binding in graph.resource_bindings:
+        if binding.source != logical_object.ref:
+            continue
+        resource = graph.get(binding.target)
+        if resource is None:
+            raise ValueError(f"Unresolved physical resource {binding.target}")
+        resources.append((binding.semantics.value, resource))
+    return tuple(sorted(resources, key=lambda item: str(item[1].ref)))
+
+
+def _resource_document(resource: ResourceObject) -> dict[str, object]:
+    if isinstance(resource, DatabaseRowObject):
         return {
             "type": "database_row",
-            "table": resource.table.fullname,
-            "key": dict(resource.key),
+            "id": str(resource.ref),
+            "table": resource.ref.table.fullname,
+            "key": dict(resource.ref.key),
         }
+    if not isinstance(resource, LocalPathObject):
+        raise TypeError(f"Unsupported physical resource object {resource!r}")
     return {
         "type": "local_path",
+        "id": str(resource.ref),
         "storage_root": resource.storage_root,
         "path": str(resource.relative_path),
-        "path_type": resource.path_type,
+        "expected_type": resource.expected_type,
     }
