@@ -40,9 +40,7 @@ class FilesystemPropertyReadContext(PropertyReadContext):
         except KeyError as error:
             raise ValueError(f"No path is configured for storage root {obj.storage_root!r}") from error
         path = root / obj.relative_path
-        metadata = path.lstat()
-        if stat.S_ISLNK(metadata.st_mode):
-            raise ValueError(f"Symlink inspection is not supported for {obj.ref}")
+        metadata = path.stat()
         if obj.expected_type is LocalPathType.FILE and not stat.S_ISREG(metadata.st_mode):
             raise ValueError(f"Expected a file at {obj.ref}")
         if obj.expected_type is LocalPathType.DIRECTORY and not stat.S_ISDIR(metadata.st_mode):

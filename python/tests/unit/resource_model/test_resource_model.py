@@ -651,6 +651,29 @@ def test_inspection_projects_non_queryable_local_file_size(db: Session, tmp_path
         parse_where_expressions(("dicom-archive.file.size=1",))
 
 
+def test_inspection_follows_local_file_symlink_for_size(db: Session, tmp_path: Path):
+    archive = add_dicom_archive(db)
+    external_file = tmp_path.parent / "external-archive.tar"
+    external_file.write_bytes(b"external dicom archive")
+    archive_path = tmp_path / "2026" / "archive.tar"
+    archive_path.parent.mkdir()
+    archive_path.symlink_to(external_file)
+
+    result = inspect_resources(
+        db,
+        InspectionQuery(
+            selections=(inspection_selection("dicom-archive.file.size"),),
+            criteria=parse_where_expressions((f"dicom-archive.id={archive.id}",)),
+        ),
+        storage_roots={"dicom-archive": tmp_path},
+    )
+
+    document = json.loads(format_inspection_json(result))
+    assert document["objects"][0]["properties"] == {
+        "size": len(b"external dicom archive")
+    }
+
+
 def test_where_parser_preserves_equals_signs_in_string_values():
     assert parse_where_expressions(("project.name=Study=A",)) == (
         make_schema().criterion("project.name", "Study=A"),
