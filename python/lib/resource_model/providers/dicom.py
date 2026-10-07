@@ -4,12 +4,10 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
-from sqlalchemy.sql import Select
 
 from lib.db.models.dicom_archive import DbDicomArchive
-from lib.db.models.mri_upload import DbMriUpload
 from lib.resource_model.provider import ResourceSchema
 from lib.resource_model.providers.core import (
     DATABASE_ROW_KIND,
@@ -102,31 +100,19 @@ DICOM_ACQUISITION_COUNT = ValueMember[DicomArchiveObject, int, object](
 )
 
 
-def _session_ids(obj: DicomArchiveObject) -> tuple[int, ...]:
-    session_ids = {upload.session_id for upload in obj.orm.mri_uploads if upload.session_id is not None}
-    if obj.orm.session_id is not None:
-        session_ids.add(obj.orm.session_id)
-    return tuple(sorted(session_ids))
-
-
-def _filter_by_session_ids(query: Select[Any], session_ids: frozenset[int]) -> Select[Any]:
-    return query.where(
-        or_(
-            DbDicomArchive.session_id.in_(session_ids),
-            DbDicomArchive.mri_uploads.any(DbMriUpload.session_id.in_(session_ids)),
-        )
-    )
-
-
 def _session_targets(obj: DicomArchiveObject) -> tuple[ObjectRef, ...]:
-    return tuple(ObjectRef(SESSION.name, str(session_id)) for session_id in _session_ids(obj))
+    if obj.orm.session_id is None:
+        return ()
+    return (ObjectRef(SESSION.name, str(obj.orm.session_id)),)
 
 
 def _session_source_selection(refs: frozenset[ObjectRef]) -> ObjectSelection[Any]:
     return ObjectSelection(
         constraints=(
             SelectionConstraint(
-                lambda query: _filter_by_session_ids(query, _target_ids(refs, SESSION.name))
+                lambda query: query.where(
+                    DbDicomArchive.session_id.in_(_target_ids(refs, SESSION.name))
+                )
             ),
         )
     )

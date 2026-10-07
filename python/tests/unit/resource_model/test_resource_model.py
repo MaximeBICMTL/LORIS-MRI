@@ -99,7 +99,7 @@ def add_dicom_archive(db: Session) -> DbDicomArchive:
         scanner_model="Example",
         scanner_serial_number="123",
         scanner_software_version="1",
-        session_id=None,
+        session_id=7,
         acquisition_metadata="",
     )
     db.add_all((project, site, session, archive))
@@ -528,6 +528,29 @@ def test_model_transitively_selects_dicom_by_belongs_to_properties(db: Session):
     assert {obj.ref for obj in fragment.logical_objects} == {
         ObjectRef(DICOM_ARCHIVE.name, str(archive.id))
     }
+
+
+def test_dicom_session_link_uses_archive_session_id_as_authoritative(db: Session):
+    archive = add_dicom_archive(db)
+    archive.mri_uploads[0].session_id = 999
+    schema = make_schema()
+    model = ResourceModel(schema)
+
+    matching = model.select_objects(
+        db,
+        DICOM_ARCHIVE.name,
+        criteria=(schema.criterion("session.id", 7),),
+    )
+    mismatching = model.select_objects(
+        db,
+        DICOM_ARCHIVE.name,
+        criteria=(schema.criterion("session.id", 999),),
+    )
+
+    assert {obj.ref for obj in matching.logical_objects} == {
+        ObjectRef(DICOM_ARCHIVE.name, str(archive.id))
+    }
+    assert mismatching.logical_objects == ()
 
 
 def test_inspection_accepts_dynamic_qualified_property_criteria(db: Session):
