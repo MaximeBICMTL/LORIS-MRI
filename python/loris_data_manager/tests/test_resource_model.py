@@ -13,6 +13,7 @@ from lib.db.models.session import DbSession
 from lib.db.models.site import DbSite
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from typer.testing import CliRunner
 
 from loris_data_manager import (
     STRING_TYPE,
@@ -31,8 +32,7 @@ from loris_data_manager import (
     ResourceSchema,
     ValueMember,
 )
-from loris_data_manager.cli import main as inspect_main
-from loris_data_manager.cli import make_parser, parse_where_expressions
+from loris_data_manager.cli import app, make_inspection_query, parse_where_expressions
 from loris_data_manager.inspection import (
     FilesystemPropertyReadContext,
     InspectionQuery,
@@ -354,13 +354,22 @@ def test_object_ids_are_queryable_semantic_properties(db: Session):
 
 
 def test_cli_uses_kebab_case_schema_names_and_has_no_identity_flags():
-    parser = make_parser()
+    query = make_inspection_query(
+        make_schema(),
+        ("dicom-archive",),
+        ("dicom-archive.id=1",),
+    )
+    root_help_result = CliRunner().invoke(app, ("--help",))
+    inspect_help_result = CliRunner().invoke(app, ("inspect", "--help"))
 
-    args = parser.parse_args(("--select", "dicom-archive", "--where", "dicom-archive.id=1"))
-
-    assert args.select == ["dicom-archive"]
-    assert not hasattr(args, "session_id")
-    assert not hasattr(args, "dicom_archive_id")
+    assert query.selections[0].expression == "dicom-archive"
+    assert root_help_result.exit_code == 0
+    assert "Commands" in root_help_result.output
+    assert "inspect" in root_help_result.output
+    assert inspect_help_result.exit_code == 0
+    assert "--select" in inspect_help_result.output
+    assert "--session-id" not in inspect_help_result.output
+    assert "--dicom-archive-id" not in inspect_help_result.output
 
 
 def test_schema_parses_text_criteria_with_the_property_query_operand_type():
@@ -716,8 +725,10 @@ def test_where_parser_preserves_equals_signs_in_string_values():
 
 
 def test_where_requires_an_explicit_selection():
-    with pytest.raises(SystemExit):
-        inspect_main(("--where", "project.name=Brainstorm"))
+    result = CliRunner().invoke(app, ("inspect", "--where", "project.name=Brainstorm"))
+
+    assert result.exit_code == 2
+    assert "Missing option '--select'" in result.output
 
 
 def test_property_selection_does_not_implicitly_reverse_belongs_to(db: Session):

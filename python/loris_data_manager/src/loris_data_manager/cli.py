@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 
-"""Inspect logical LORIS objects and the resources bound to them."""
+"""Command-line inspection of logical LORIS objects and their resources."""
 
-import argparse
 from collections.abc import Sequence
+from enum import StrEnum
 from pathlib import Path
+from typing import Annotated
 
+import typer
 from lib.config_file import load_config
 from lib.db.connect import get_database_engine
 from lib.db.queries.config import try_get_config_with_setting_name
@@ -23,6 +25,18 @@ from loris_data_manager.providers.core import register_core_schema
 from loris_data_manager.providers.dicom import register_dicom_schema
 from loris_data_manager.schema import PropertyCriterion
 
+app = typer.Typer(
+    add_completion=False,
+    help="Inspect logical LORIS objects, relationships, database rows, and local paths.",
+)
+
+
+class OutputFormat(StrEnum):
+    """Supported inspection output formats."""
+
+    TEXT = "text"
+    JSON = "json"
+
 
 def make_resource_schema() -> ResourceSchema:
     """Compose the resource schema provided by this LORIS installation."""
@@ -33,57 +47,58 @@ def make_resource_schema() -> ResourceSchema:
     return schema
 
 
-def make_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Inspect logical LORIS objects, relationships, database rows, and local paths.",
-    )
-    parser.add_argument("-p", "--profile", help="Python database configuration profile.")
-    parser.add_argument(
-        "--select",
-        action="append",
-        required=True,
-        metavar="OBJECT-OR-PROPERTY",
-        help="Select a whole logical object or one property; repeat to add projections.",
-    )
-    parser.add_argument(
-        "--where",
-        action="append",
-        metavar="PROPERTY-PATH=VALUE",
-        help="Filter by a semantic property or relationship path; repeat to combine with AND.",
-    )
-    parser.add_argument(
-        "--all",
-        action="store_true",
-        dest="select_all",
-        help="Allow inspection without a narrowing selector.",
-    )
-    parser.add_argument(
-        "--expand-related",
-        action="store_true",
-        help="Resolve directly related objects for context.",
-    )
-    parser.add_argument("--format", choices=("text", "json"), default="text")
-    return parser
+@app.callback()
+def main() -> None:
+    """Manage LORIS data and its physical resources."""
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    parser = make_parser()
-    args = parser.parse_args(argv)
+@app.command("inspect")
+def inspect(
+    select: Annotated[
+        list[str],
+        typer.Option(
+            "--select",
+            metavar="OBJECT-OR-PROPERTY",
+            help="Select a whole logical object or one property; repeat to add projections.",
+        ),
+    ],
+    profile: Annotated[
+        str | None,
+        typer.Option("-p", "--profile", help="Python database configuration profile."),
+    ] = None,
+    where: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--where",
+            metavar="PROPERTY-PATH=VALUE",
+            help="Filter by a semantic property or relationship path; repeat to combine with AND.",
+        ),
+    ] = None,
+    select_all: Annotated[
+        bool,
+        typer.Option("--all", help="Allow inspection without a narrowing selector."),
+    ] = False,
+    expand_related: Annotated[
+        bool,
+        typer.Option("--expand-related", help="Resolve directly related objects for context."),
+    ] = False,
+    output_format: Annotated[OutputFormat, typer.Option("--format")] = OutputFormat.TEXT,
+) -> None:
+    """Inspect logical LORIS objects and their bound resources."""
+
+    schema = make_resource_schema()
     try:
-        schema = make_resource_schema()
-        criteria = parse_where_expressions(args.where or (), schema=schema)
-        query = InspectionQuery(
-            selections=tuple(
-                parse_inspection_selection(schema, expression) for expression in args.select
-            ),
-            criteria=criteria,
-            select_all=args.select_all,
-            expand_related=args.expand_related,
+        query = make_inspection_query(
+            schema,
+            select,
+            where or (),
+            select_all=select_all,
+            expand_related=expand_related,
         )
     except ValueError as error:
-        parser.error(str(error))
+        raise typer.BadParameter(str(error)) from error
 
-    config = load_config(args.profile)
+    config = load_config(profile)
     engine = get_database_engine(config.mysql)
     try:
         with Session(engine) as db:
@@ -91,16 +106,41 @@ def main(argv: Sequence[str] | None = None) -> int:
             if any(selection.expression == "dicom-archive.file.size" for selection in query.selections):
                 archive_root = try_get_config_with_setting_name(db, "tarchiveLibraryDir")
                 if archive_root is None or archive_root.value is None:
-                    parser.error("Missing tarchiveLibraryDir configuration for file inspection")
+                    raise typer.BadParameter(
+                        "Missing tarchiveLibraryDir configuration for file inspection"
+                    )
                 storage_roots["dicom-archive"] = Path(archive_root.value)
             result = inspect_resources(db, schema, query, storage_roots=storage_roots)
-            formatter = format_inspection_json if args.format == "json" else format_inspection_text
+            formatter = (
+                format_inspection_json
+                if output_format is OutputFormat.JSON
+                else format_inspection_text
+            )
             output = formatter(result)
     finally:
         engine.dispose()
 
-    print(output)
-    return 0
+    typer.echo(output)
+
+
+def make_inspection_query(
+    schema: ResourceSchema,
+    selections: Sequence[str],
+    where: Sequence[str],
+    *,
+    select_all: bool = False,
+    expand_related: bool = False,
+) -> InspectionQuery:
+    """Build an inspection query from command-line expressions."""
+
+    return InspectionQuery(
+        selections=tuple(
+            parse_inspection_selection(schema, expression) for expression in selections
+        ),
+        criteria=parse_where_expressions(where, schema=schema),
+        select_all=select_all,
+        expand_related=expand_related,
+    )
 
 
 def parse_where_expressions(
@@ -127,4 +167,4 @@ def parse_where_expressions(
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    app()

@@ -10,6 +10,11 @@ Everything currently implemented on this branch is highly experimental. No publi
 class structure should be treated as stable: change or replace the architecture whenever a simpler
 design can be tested through a useful vertical slice.
 
+There are no current consumers and no compatibility guarantees. Do not preserve old APIs, command
+names, entry points, import paths, wrappers, aliases, or deprecated behavior when changing the
+design unless the user explicitly requests compatibility for a specific interface. Prefer removing
+superseded interfaces as part of the same change.
+
 ## Design direction
 
 - Keep SQLAlchemy as the database-row model; do not build a replacement ORM.
@@ -84,11 +89,10 @@ models:
 - typed logical and physical resource objects, explicit resource bindings, generic selections, and
   composable partial resource graphs.
 
-The package's `inspect_resources` command is a read-only CLI with text and JSON output;
-`python/scripts/inspect_resources.py` remains as a compatibility entry point. Repeatable
-`--select` expressions project whole logical objects or individual properties, while repeatable
-qualified `--where` filters constrain the query and are combined using AND. Object IDs are
-ordinary typed, queryable semantic properties. Explicit relationship paths such as
+The package's `loris-data-manager inspect` command is a read-only CLI with text and JSON output.
+Repeatable `--select` expressions project whole logical objects or individual properties, while
+repeatable qualified `--where` filters constrain the query and are combined using AND. Object IDs
+are ordinary typed, queryable semantic properties. Explicit relationship paths such as
 `--where 'dicom-archive.session.project.name=Brainstorm'` are supported. Selection may traverse
 `belongs-to` relationships in either direction when there is exactly one path. Intermediate
 traversal objects do not become output automatically.
@@ -143,8 +147,8 @@ ambiguous relationships should fail closed for destructive operations.
 Run from the repository root:
 
 ```bash
-uv run ruff check python/loris_data_manager python/scripts/inspect_resources.py
-uv run pyright python/loris_data_manager python/scripts/inspect_resources.py
+uv run ruff check python/loris_data_manager
+uv run pyright python/loris_data_manager
 uv run pytest
 ```
 

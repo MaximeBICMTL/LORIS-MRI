@@ -7,10 +7,11 @@ license = "GPL-3.0-or-later"
 requires-python = ">= 3.11"
 dependencies = [
     "sqlalchemy>=2.0.0",
+    "typer>=0.16.0",
 ]
 
 [project.scripts]
-inspect_resources = "loris_data_manager.cli:main"
+loris-data-manager = "loris_data_manager.cli:app"
 
 [build-system]
 requires = ["hatchling"]
