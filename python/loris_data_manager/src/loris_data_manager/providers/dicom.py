@@ -95,10 +95,11 @@ DICOM_STUDY_UID = ValueMember[DicomArchiveObject, str, str](
     source=OrmColumnSource(DbDicomArchive.study_uid),
     query=PropertyQuery(STRING_TYPE),
 )
-DICOM_PATIENT_NAME = ValueMember[DicomArchiveObject, str, object](
+DICOM_PATIENT_NAME = ValueMember[DicomArchiveObject, str, str](
     name="patient-name",
     value_type=STRING_TYPE,
     source=OrmColumnSource(DbDicomArchive.patient_name),
+    query=PropertyQuery(STRING_TYPE),
 )
 DICOM_ACQUISITION_COUNT = ValueMember[DicomArchiveObject, int, object](
     name="acquisition-count",

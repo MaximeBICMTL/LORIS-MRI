@@ -227,9 +227,11 @@ def test_selection_rejects_references_for_another_object_kind(db: Session):
         )
 
 
-def test_non_queryable_property_cannot_create_a_predicate():
-    with pytest.raises(ValueError, match="not queryable"):
-        DICOM_PATIENT_NAME.predicate("example")
+def test_dicom_patient_name_is_queryable():
+    predicate = DICOM_PATIENT_NAME.predicate("example")
+
+    assert predicate.property is DICOM_PATIENT_NAME
+    assert predicate.value == "example"
 
 
 def test_composes_independently_resolved_provider_fragments(db: Session):
@@ -729,6 +731,56 @@ def test_inspection_composes_project_and_visit_selectors_across_providers(db: Se
     assert result.graph.get(ObjectRef(SITE.name, "1")) is not None
 
 
+def test_inspection_selects_session_by_reverse_dicom_property(db: Session):
+    add_dicom_archive(db)
+
+    result = inspect_resources(
+        db,
+        make_schema(),
+        InspectionQuery(
+            selections=(inspection_selection("session.visit-label"),),
+            criteria=parse_where_expressions(
+                ("dicom-archive.patient-name=DCC001_000001_V1",)
+            ),
+        ),
+    )
+
+    assert result.selected == {ObjectRef(SESSION.name, "7")}
+
+
+def test_inspection_selects_project_by_transitive_reverse_dicom_property(db: Session):
+    add_dicom_archive(db)
+    schema = make_schema()
+    query = InspectionQuery(
+        selections=(parse_inspection_selection(schema, "project.name"),),
+        criteria=parse_where_expressions(
+            ("dicom-archive.patient-name=DCC001_000001_V1",)
+        ),
+    )
+
+    plan = plan_inspection(schema, query)
+    result = inspect_resources(db, schema, query)
+    sql = format_inspection_sql(plan, mysql.dialect())
+
+    assert "JOIN session" in sql
+    assert "JOIN tarchive" in sql
+    assert result.selected == {ObjectRef(PROJECT.name, "3")}
+
+
+def test_automatic_relationship_path_cannot_change_direction(db: Session):
+    add_dicom_archive(db)
+    schema = make_schema()
+    query = InspectionQuery(
+        selections=(parse_inspection_selection(schema, "project.name"),),
+        criteria=parse_where_expressions(
+            ("dicom-archive.session.visit-label=V1",)
+        ),
+    )
+
+    with pytest.raises(ValueError, match="changes belongs-to traversal direction"):
+        plan_inspection(schema, query)
+
+
 def test_inspection_selects_projects_and_sites_by_dynamic_properties(db: Session):
     add_dicom_archive(db)
 
@@ -981,16 +1033,19 @@ def test_where_requires_an_explicit_selection():
     assert "Missing option '--select'" in result.output
 
 
-def test_property_selection_does_not_implicitly_reverse_belongs_to(db: Session):
+def test_property_selection_implicitly_reverse_traverses_belongs_to(db: Session):
     add_dicom_archive(db)
     model = ResourceModel(make_schema())
 
-    with pytest.raises(ValueError, match="No belongs-to path"):
-        model.select_objects(
-            db,
-            PROJECT.name,
-            criteria=(make_schema().criterion("session.visit-label", "V1"),),
-        )
+    fragment = model.select_objects(
+        db,
+        PROJECT.name,
+        criteria=(make_schema().criterion("session.visit-label", "V1"),),
+    )
+
+    assert {obj.ref for obj in fragment.logical_objects} == {
+        ObjectRef(PROJECT.name, "3")
+    }
 
 
 def test_property_selection_rejects_ambiguous_belongs_to_paths(db: Session):

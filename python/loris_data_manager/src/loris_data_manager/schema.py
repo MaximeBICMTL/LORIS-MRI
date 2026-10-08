@@ -351,7 +351,13 @@ class LinkSource(Protocol[SourceObjectT]):
     @property
     def queryable(self) -> bool: ...
 
-    def join(self, statement: Select[Any], *, isouter: bool) -> Select[Any] | None: ...
+    def join(
+        self,
+        statement: Select[Any],
+        *,
+        forward: bool,
+        isouter: bool,
+    ) -> Select[Any] | None: ...
 
     def select_sources(
         self,
@@ -382,8 +388,8 @@ class CallableLinkSource(Generic[ObjectT]):
     def queryable(self) -> bool:
         return False
 
-    def join(self, statement: Select[Any], *, isouter: bool) -> None:
-        del statement, isouter
+    def join(self, statement: Select[Any], *, forward: bool, isouter: bool) -> None:
+        del statement, forward, isouter
         return None
 
     def select_sources(
@@ -414,9 +420,18 @@ class OrmForeignKeySource:
     def queryable(self) -> bool:
         return True
 
-    def join(self, statement: Select[Any], *, isouter: bool) -> Select[Any]:
+    def join(
+        self,
+        statement: Select[Any],
+        *,
+        forward: bool,
+        isouter: bool,
+    ) -> Select[Any]:
+        joined_model = (
+            self.target_attribute.class_ if forward else self.source_attribute.class_
+        )
         return statement.join(
-            self.target_attribute.class_,
+            joined_model,
             self.source_attribute == self.target_attribute,
             isouter=isouter,
         )
@@ -472,8 +487,8 @@ class OrmColumnLinkSource(Generic[ValueT]):
     def queryable(self) -> bool:
         return False
 
-    def join(self, statement: Select[Any], *, isouter: bool) -> None:
-        del statement, isouter
+    def join(self, statement: Select[Any], *, forward: bool, isouter: bool) -> None:
+        del statement, forward, isouter
         return None
 
     def select_sources(
@@ -505,8 +520,8 @@ class OrmEntitySource:
     def queryable(self) -> bool:
         return False
 
-    def join(self, statement: Select[Any], *, isouter: bool) -> None:
-        del statement, isouter
+    def join(self, statement: Select[Any], *, forward: bool, isouter: bool) -> None:
+        del statement, forward, isouter
         return None
 
     def select_sources(
@@ -541,8 +556,14 @@ class LinkMember(Generic[ObjectT]):
     def queryable(self) -> bool:
         return self.source.queryable
 
-    def apply_join(self, statement: Select[Any], *, isouter: bool = False) -> Select[Any]:
-        joined = self.source.join(statement, isouter=isouter)
+    def apply_join(
+        self,
+        statement: Select[Any],
+        *,
+        forward: bool = True,
+        isouter: bool = False,
+    ) -> Select[Any]:
+        joined = self.source.join(statement, forward=forward, isouter=isouter)
         if joined is None:
             raise ValueError(f"Object link {self.source_kind}.{self.name} cannot be used in SQL planning")
         return joined

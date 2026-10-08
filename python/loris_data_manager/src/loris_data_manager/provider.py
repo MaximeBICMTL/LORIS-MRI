@@ -288,89 +288,67 @@ class ResourceSchema:
             value=property_definition.query.operand_type.parse(text),
         )
 
-    def belongs_to_path(self, source_kind: str, target_kind: str) -> tuple[LinkMember[Any], ...]:
-        """Find the unique transitive belongs-to path between two object kinds."""
-
-        if source_kind == target_kind:
-            return ()
-        paths: list[tuple[LinkMember[Any], ...]] = []
-
-        def visit(current: str, path: tuple[LinkMember[Any], ...], visited: frozenset[str]) -> None:
-            for link in self.links(current):
-                if (
-                    link.traversal_semantics is not RelationshipSemantics.BELONGS_TO
-                    or not link.queryable
-                    or link.target_kind in visited
-                ):
-                    continue
-                next_path = (*path, link)
-                if link.target_kind == target_kind:
-                    paths.append(next_path)
-                else:
-                    visit(link.target_kind, next_path, visited | {link.target_kind})
-
-        visit(source_kind, (), frozenset({source_kind}))
-        if not paths:
-            raise ValueError(f"No belongs-to path exists from {source_kind!r} to {target_kind!r}")
-        if len(paths) > 1:
-            rendered = [" -> ".join(link.name for link in path) for path in paths]
-            raise ValueError(
-                f"Ambiguous belongs-to path from {source_kind!r} to {target_kind!r}: {rendered}"
-            )
-        return paths[0]
-
-    def belongs_to_connection(
+    def belongs_to_traversal(
         self,
         source_kind: str,
         target_kind: str,
     ) -> tuple[tuple[LinkMember[Any], bool], ...]:
-        """Find a unique belongs-to path, allowing traversal in either direction.
+        """Find a unique monotonic belongs-to path in either direction.
 
         The boolean on each step is true when traversing from the relationship's
-        source to its target and false when traversing in reverse.
+        source to its target and false when traversing in reverse. A path never
+        changes direction, which prevents implicit traversal between siblings.
         """
 
         if source_kind == target_kind:
             return ()
-        paths: list[tuple[tuple[str, LinkMember[Any], bool], ...]] = []
+        paths: list[tuple[tuple[LinkMember[Any], bool], ...]] = []
 
         def visit(
             current: str,
-            path: tuple[tuple[str, LinkMember[Any], bool], ...],
+            path: tuple[tuple[LinkMember[Any], bool], ...],
             visited: frozenset[str],
+            *,
+            forward: bool,
         ) -> None:
             candidates = (
-                (source_kind, link)
-                for source_kind in self._object_kinds
-                for link in self.links(source_kind)
+                link
+                for candidate_kind in self._object_kinds
+                for link in self.links(candidate_kind)
                 if link.traversal_semantics is RelationshipSemantics.BELONGS_TO
                 and link.queryable
             )
-            for link_source, link in candidates:
-                if link_source == current:
-                    neighbor, forward = link.target_kind, True
-                elif link.target_kind == current:
-                    neighbor, forward = link_source, False
+            for link in candidates:
+                if forward and link.source_kind == current:
+                    neighbor = link.target_kind
+                elif not forward and link.target_kind == current:
+                    neighbor = link.source_kind
                 else:
                     continue
                 if neighbor in visited:
                     continue
-                next_path = (*path, (link_source, link, forward))
+                next_path = (*path, (link, forward))
                 if neighbor == target_kind:
                     paths.append(next_path)
                 else:
-                    visit(neighbor, next_path, visited | {neighbor})
+                    visit(
+                        neighbor,
+                        next_path,
+                        visited | {neighbor},
+                        forward=forward,
+                    )
 
-        visit(source_kind, (), frozenset({source_kind}))
+        visit(source_kind, (), frozenset({source_kind}), forward=True)
+        visit(source_kind, (), frozenset({source_kind}), forward=False)
         if not paths:
-            raise ValueError(f"No belongs-to connection exists from {source_kind!r} to {target_kind!r}")
+            raise ValueError(f"No belongs-to path exists from {source_kind!r} to {target_kind!r}")
         if len(paths) > 1:
-            rendered = [" -> ".join(step[1].name for step in path) for path in paths]
+            rendered = [" -> ".join(step[0].name for step in path) for path in paths]
             raise ValueError(
-                f"Ambiguous belongs-to connection from {source_kind!r} to {target_kind!r}: "
+                f"Ambiguous belongs-to path from {source_kind!r} to {target_kind!r}: "
                 f"{rendered}"
             )
-        return tuple((link, forward) for _, link, forward in paths[0])
+        return paths[0]
 
 
 class ResourceModel:
@@ -463,14 +441,18 @@ class ResourceModel:
 
         predicates: list[PropertyPredicate[Any]] = []
         constrained_refs = refs
-        joins: list[tuple[LinkMember[Any], bool]] = []
+        joins: list[tuple[LinkMember[Any], bool, bool]] = []
 
-        def add_join(link: LinkMember[Any], *, isouter: bool) -> None:
-            for index, (existing, existing_outer) in enumerate(joins):
-                if existing.source_kind == link.source_kind and existing.name == link.name:
-                    joins[index] = (existing, existing_outer and isouter)
+        def add_join(link: LinkMember[Any], *, forward: bool, isouter: bool) -> None:
+            for index, (existing, existing_forward, existing_outer) in enumerate(joins):
+                if (
+                    existing.source_kind == link.source_kind
+                    and existing.name == link.name
+                    and existing_forward is forward
+                ):
+                    joins[index] = (existing, forward, existing_outer and isouter)
                     return
-            joins.append((link, isouter))
+            joins.append((link, forward, isouter))
 
         for criterion in criteria:
             predicate = self.schema.predicate(criterion)
@@ -478,28 +460,38 @@ class ResourceModel:
             if criterion.path.root_kind == kind and not criterion.path.link_members:
                 continue
             if criterion.path.root_kind == kind:
-                path = self.schema.path_links(criterion.path)
+                path = tuple((link, True) for link in self.schema.path_links(criterion.path))
             else:
                 path = (
-                    *self.schema.belongs_to_path(kind, criterion.path.root_kind),
-                    *self.schema.path_links(criterion.path),
+                    *self.schema.belongs_to_traversal(kind, criterion.path.root_kind),
+                    *((link, True) for link in self.schema.path_links(criterion.path)),
                 )
-            for link in path:
+            directions = {forward for _, forward in path}
+            if len(directions) > 1:
+                raise ValueError(
+                    f"Property path from {kind!r} to {criterion.path} changes "
+                    "belongs-to traversal direction"
+                )
+            for link, forward in path:
                 if not link.queryable:
                     raise ValueError(
                         f"Object link {link.source_kind}.{link.name} cannot be used in SQL planning"
                     )
-                add_join(link, isouter=False)
+                add_join(link, forward=forward, isouter=False)
         for link in projection_links:
             if not link.queryable:
                 raise ValueError(
                     f"Object link {link.source_kind}.{link.name} cannot be used in SQL planning"
                 )
-            add_join(link, isouter=True)
+            add_join(link, forward=True, isouter=True)
         provider = self.schema.provider(kind)
         statement = provider.statement(ObjectSelection(refs=constrained_refs))
-        for link, isouter in joins:
-            statement = link.apply_join(statement, isouter=isouter)
+        for link, forward, isouter in joins:
+            statement = link.apply_join(
+                statement,
+                forward=forward,
+                isouter=isouter,
+            )
         for predicate in predicates:
             statement = predicate.apply(statement)
         for entity in related_entities:
