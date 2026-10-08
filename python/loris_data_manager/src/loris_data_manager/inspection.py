@@ -5,11 +5,20 @@ import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
+from sqlalchemy import bindparam
+from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import Select
 
 from loris_data_manager.graph import GraphFragment, ResourceGraph
-from loris_data_manager.provider import ResourceModel, ResourceSchema
+from loris_data_manager.provider import (
+    OrmEntityLoad,
+    ProviderLoadStep,
+    ResourceModel,
+    ResourceSchema,
+)
 from loris_data_manager.providers.core import PROJECT, SESSION, SITE
 from loris_data_manager.resources import (
     DatabaseRowObject,
@@ -21,9 +30,12 @@ from loris_data_manager.resources import (
     ResourceRef,
 )
 from loris_data_manager.schema import (
+    LinkMember,
+    OrmLoadRequirement,
     PropertyCriterion,
     PropertyPath,
     PropertyReadContext,
+    PropertyRef,
 )
 
 
@@ -81,6 +93,151 @@ class InspectionResult:
     projections: tuple[tuple[InspectionSelection, frozenset[ResourceRef]], ...]
 
 
+@dataclass(frozen=True, slots=True)
+class InspectionPlan:
+    """A database-independent inspection request lowered to executable SQL."""
+
+    schema: ResourceSchema
+    query: InspectionQuery
+    anchor_kind: str
+    primary_statement: Select[Any]
+    entities: tuple["InspectionEntityPlan", ...]
+    load_steps: tuple[ProviderLoadStep, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class InspectionEntityPlan:
+    """One logical ORM entity returned by the primary inspection statement."""
+
+    path: tuple[str, ...]
+    kind: str
+    orm_load: OrmLoadRequirement
+    links: frozenset[str]
+
+
+def plan_inspection(schema: ResourceSchema, query: InspectionQuery) -> InspectionPlan:
+    """Plan an inspection without opening a session or executing SQL."""
+
+    anchor_kind = _anchor_kind(query)
+    provider = schema.provider(anchor_kind)
+    entities, projection_links = _plan_entities(schema, query, anchor_kind)
+    anchor = entities[0]
+    deferred_links = anchor.links & provider.deferred_links
+    statement = ResourceModel(schema).plan_selection(
+        anchor_kind,
+        criteria=query.criteria,
+        orm_load=anchor.orm_load,
+        projection_links=projection_links,
+        related_entities=tuple(
+            OrmEntityLoad(entity.kind, entity.orm_load) for entity in entities[1:]
+        ),
+    )
+    return InspectionPlan(
+        schema,
+        query,
+        anchor_kind,
+        statement,
+        entities,
+        provider.load_steps(deferred_links),
+    )
+
+
+def _plan_entities(
+    schema: ResourceSchema,
+    query: InspectionQuery,
+    anchor_kind: str,
+) -> tuple[tuple[InspectionEntityPlan, ...], tuple[LinkMember[Any], ...]]:
+    requirements: dict[tuple[str, ...], OrmLoadRequirement] = {
+        (): OrmLoadRequirement()
+    }
+    kinds: dict[tuple[str, ...], str] = {(): anchor_kind}
+    links_by_path: dict[tuple[str, ...], set[str]] = {(): set()}
+    projection_links: list[LinkMember[Any]] = []
+
+    for selection in query.selections:
+        path = selection.property_path
+        if path is None and selection.target_kind == anchor_kind:
+            for member in schema.properties(anchor_kind):
+                requirements[()] |= member.orm_load
+            for link in schema.links(anchor_kind):
+                requirements[()] |= link.orm_load
+                links_by_path[()].add(link.name)
+            continue
+        if path is None:
+            raise ValueError(
+                f"Selection {selection.expression!r} is not rooted at {anchor_kind!r}"
+            )
+        if path.root_kind != anchor_kind:
+            raise ValueError(f"Explicit selection path {path} must start at query anchor {anchor_kind!r}")
+        current_path: tuple[str, ...] = ()
+        for link in schema.path_links(path):
+            requirements[current_path] |= link.orm_load
+            links_by_path[current_path].add(link.name)
+            if not schema.has_provider(link.target_kind):
+                continue
+            if link not in projection_links:
+                projection_links.append(link)
+            current_path = (*current_path, link.name)
+            requirements.setdefault(current_path, OrmLoadRequirement())
+            kinds.setdefault(current_path, link.target_kind)
+            links_by_path.setdefault(current_path, set())
+        if schema.has_provider(path.property.object_kind):
+            requirements[current_path] |= schema.property(path.property).orm_load
+
+    entities = tuple(
+        InspectionEntityPlan(
+            path=path,
+            kind=kinds[path],
+            orm_load=requirement,
+            links=frozenset(links_by_path[path]),
+        )
+        for path, requirement in requirements.items()
+    )
+    return entities, tuple(projection_links)
+
+
+def format_inspection_sql(plan: InspectionPlan, dialect: Dialect) -> str:
+    """Render the non-executing SQL plan using the configured database dialect."""
+
+    sql = str(
+        plan.primary_statement.compile(
+            dialect=dialect,
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+    lines = [
+        f"-- Step 1: select and hydrate the {plan.anchor_kind} inspection graph",
+        f"{sql};",
+    ]
+    for index, step in enumerate(plan.load_steps, start=2):
+        statement = step.statement_for_keys(bindparam(step.input_name, expanding=True))
+        template = str(statement.compile(dialect=dialect)).replace(
+            f"__[POSTCOMPILE_{step.input_name}]", f"__{step.input_name}"
+        )
+        lines.extend(
+            (
+                "",
+                f"-- Step {index}: {step.name}",
+                f"-- Input: {step.input_name} from step 1, supplied in bounded batches.",
+                f"{template};",
+            )
+        )
+    if _has_unplanned_expansion(plan):
+        lines.extend(
+            (
+                "",
+                "-- Subsequent graph hydration is runtime-dependent.",
+                "-- Input: object IDs produced by step 1 (supplied in bounded batches).",
+                "-- The current providers may issue collection and related-object SELECT statements.",
+            )
+        )
+    return "\n".join(lines)
+
+
+def _has_unplanned_expansion(plan: InspectionPlan) -> bool:
+    return plan.query.expand_related
+
+
 def inspect_resources(
     db: Session,
     schema: ResourceSchema,
@@ -88,27 +245,66 @@ def inspect_resources(
     *,
     storage_roots: Mapping[str, Path] | None = None,
 ) -> InspectionResult:
+    return execute_inspection_plan(
+        db,
+        plan_inspection(schema, query),
+        storage_roots=storage_roots,
+    )
+
+
+def execute_inspection_plan(
+    db: Session,
+    plan: InspectionPlan,
+    *,
+    storage_roots: Mapping[str, Path] | None = None,
+) -> InspectionResult:
+    """Execute a previously constructed inspection plan."""
+
+    schema = plan.schema
+    query = plan.query
     model = ResourceModel(schema)
     graph = ResourceGraph()
     selected: set[ResourceRef] = set()
-    anchor_kind = _anchor_kind(query)
-    anchor_fragment = model.select_objects(db, anchor_kind, criteria=query.criteria)
+    rows = tuple(db.execute(plan.primary_statement).unique())
+    fragments: dict[tuple[str, ...], GraphFragment] = {}
+    for index, entity in enumerate(plan.entities):
+        provider = schema.provider(entity.kind)
+        objects_by_ref: dict[ObjectRef, Any] = {}
+        for row in rows:
+            orm_object = row[index]
+            if orm_object is None:
+                continue
+            logical_object = provider.object_from_orm(orm_object)
+            objects_by_ref[logical_object.ref] = logical_object
+        fragment = model.fragment(
+            provider,
+            tuple(objects_by_ref.values()),
+            link_names=entity.links - provider.deferred_links,
+        )
+        fragments[entity.path] = fragment
+        graph.add(fragment)
+    anchor_fragment = fragments[()]
     anchor_refs = frozenset(obj.ref for obj in anchor_fragment.logical_objects)
+    for step in plan.load_steps:
+        step_refs = frozenset(ref for ref in anchor_refs if ref.kind == step.input_kind)
+        if not step_refs:
+            continue
+        keys = tuple(ref.key for ref in sorted(step_refs, key=lambda ref: ref.key))
+        for offset in range(0, len(keys), step.batch_size):
+            batch = keys[offset : offset + step.batch_size]
+            rows = tuple(db.scalars(step.statement_for_keys(batch)))
+            graph.add(step.fragment_from_rows(rows))
     projections: list[tuple[InspectionSelection, frozenset[ResourceRef]]] = []
 
     for selection in query.selections:
         if schema.has_provider(selection.target_kind):
-            target_refs = _project_logical_refs(
-                db, schema, model, anchor_kind, anchor_refs, selection
-            )
-            target_fragment = model.select_objects(db, selection.target_kind, refs=target_refs)
-            graph.add(target_fragment)
+            target_fragment = _projected_fragment(fragments, selection)
             projected_refs: frozenset[ResourceRef] = frozenset(
                 obj.ref for obj in target_fragment.logical_objects
             )
         else:
             physical_objects = _project_physical_objects(
-                db, schema, model, anchor_fragment, selection
+                db, schema, model, graph, anchor_fragment, selection
             )
             graph.add(GraphFragment(physical_objects=physical_objects))
             projected_refs = frozenset(obj.ref for obj in physical_objects)
@@ -148,28 +344,23 @@ def _anchor_kind(query: InspectionQuery) -> str:
     return next(iter(roots))
 
 
-def _project_logical_refs(
-    db: Session,
-    schema: ResourceSchema,
-    model: ResourceModel,
-    anchor_kind: str,
-    anchor_refs: frozenset[ObjectRef],
+def _projected_fragment(
+    fragments: Mapping[tuple[str, ...], GraphFragment],
     selection: InspectionSelection,
-) -> frozenset[ObjectRef]:
+) -> GraphFragment:
     path = selection.property_path
-    if path is not None and path.link_members:
-        if path.root_kind != anchor_kind:
-            raise ValueError(f"Explicit selection path {path} must start at query anchor {anchor_kind!r}")
-        steps = tuple((link, True) for link in schema.path_links(path))
-    else:
-        steps = schema.belongs_to_connection(anchor_kind, selection.target_kind)
-    return model.traverse_refs(db, anchor_refs, steps)
+    entity_path = () if path is None else path.link_members
+    try:
+        return fragments[entity_path]
+    except KeyError as error:
+        raise ValueError(f"Selection {selection.expression!r} was not hydrated by its plan") from error
 
 
 def _project_physical_objects(
     db: Session,
     schema: ResourceSchema,
     model: ResourceModel,
+    graph: ResourceGraph,
     anchor_fragment: GraphFragment,
     selection: InspectionSelection,
 ) -> tuple[PhysicalObject, ...]:
@@ -178,7 +369,18 @@ def _project_physical_objects(
         raise ValueError(f"Physical object kind {selection.target_kind!r} requires an explicit path")
     current: tuple[ResourceObject, ...] = anchor_fragment.logical_objects
     for link in schema.path_links(path):
-        targets = tuple(target for obj in current for target in link.targets_for_source(obj))
+        targets: tuple[ObjectRef | ResourceObject, ...] = tuple(
+            target
+            for obj in current
+            for concrete in graph.outgoing(obj.ref)
+            if concrete.member == PropertyRef(link.source_kind, link.name)
+            for target in (
+                concrete.target
+                if isinstance(concrete.target, ObjectRef)
+                else graph.get(concrete.target)
+            ,)
+            if target is not None
+        )
         logical_refs = frozenset(target for target in targets if isinstance(target, ObjectRef))
         physical = tuple(target for target in targets if not isinstance(target, ObjectRef))
         if logical_refs and physical:
@@ -189,7 +391,9 @@ def _project_physical_objects(
         else:
             current = physical
     return tuple(
-        obj for obj in current if isinstance(obj, (DatabaseRowObject, LocalPathObject))
+        cast(PhysicalObject, obj)
+        for obj in current
+        if isinstance(obj, (DatabaseRowObject, LocalPathObject))
     )
 
 
@@ -284,8 +488,16 @@ def _object_document(result: InspectionResult, obj: ResourceObject) -> dict[str,
 
 
 def _visible_objects(result: InspectionResult) -> tuple[ResourceObject, ...]:
+    reachable = set(result.selected)
+    while True:
+        targets = {
+            link.target for link in result.graph.links if link.source in reachable
+        }
+        if targets <= reachable:
+            break
+        reachable.update(targets)
     return (
-        *result.graph.logical_objects,
+        *(obj for obj in result.graph.logical_objects if obj.ref in reachable),
         *(obj for obj in result.graph.physical_objects if obj.ref in result.selected),
     )
 

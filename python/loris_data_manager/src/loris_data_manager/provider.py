@@ -1,9 +1,12 @@
 """Typed provider interface and schema registry."""
 
-from collections.abc import Sequence
-from typing import Any, Protocol, TypeVar
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from typing import Any, Protocol, TypeVar, cast
 
-from sqlalchemy.orm import Session
+from sqlalchemy import inspect as inspect_orm
+from sqlalchemy.orm import Mapper, Session, load_only
+from sqlalchemy.sql import Select
 
 from loris_data_manager.graph import GraphFragment
 from loris_data_manager.resources import ObjectRef, ResourceObject
@@ -13,6 +16,8 @@ from loris_data_manager.schema import (
     ObjectKind,
     ObjectLink,
     ObjectSelection,
+    OrmForeignKeySource,
+    OrmLoadRequirement,
     PropertyCriterion,
     PropertyPath,
     PropertyPredicate,
@@ -24,10 +29,46 @@ from loris_data_manager.schema import (
 ObjectT = TypeVar("ObjectT", bound=LogicalObject)
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderLoadStep:
+    """One provider-owned query populated from a preceding set of object IDs."""
+
+    name: str
+    input_name: str
+    input_kind: str
+    statement_for_keys: Callable[[Any], Select[Any]]
+    fragment_from_rows: Callable[[tuple[Any, ...]], GraphFragment]
+    batch_size: int = 500
+
+
+@dataclass(frozen=True, slots=True)
+class OrmEntityLoad:
+    """One ORM entity returned and selectively hydrated by a planned statement."""
+
+    kind: str
+    requirement: OrmLoadRequirement
+
+
 class ResourceProvider(Protocol[ObjectT]):
     """Domain-specific projection from ORM state to logical objects."""
 
     kind: ObjectKind
+    orm_model: type[Any]
+
+    def statement(self, selection: ObjectSelection[ObjectT]) -> Select[Any]:
+        """Build, but do not execute, a query for this provider's objects."""
+        ...
+
+    def object_from_orm(self, row: Any) -> ObjectT:
+        """Wrap one ORM result as this provider's logical object."""
+        ...
+
+    @property
+    def deferred_links(self) -> frozenset[str]:
+        """Links whose objects are loaded through explicit plan steps."""
+        ...
+
+    def load_steps(self, links: frozenset[str]) -> tuple[ProviderLoadStep, ...]: ...
 
     def find(
         self,
@@ -84,6 +125,7 @@ class ResourceSchema:
         if kind_name in self._providers:
             raise ValueError(f"Provider for {kind_name!r} is already registered")
         self._providers[kind_name] = provider
+        self._validate_mapped_links()
 
     def register_member(self, kind: str, member: ValueMember[Any, Any, Any] | LinkMember[Any]) -> None:
         definition = self.object_kind(kind)
@@ -99,6 +141,27 @@ class ResourceSchema:
             object_type=definition.object_type,
             members=(*definition.members, member),
         )
+        self._validate_mapped_links()
+
+    def _validate_mapped_links(self) -> None:
+        for source_kind, source_provider in self._providers.items():
+            for link in self.links(source_kind):
+                if not isinstance(link.source, OrmForeignKeySource):
+                    continue
+                if link.source.source_attribute.class_ is not source_provider.orm_model:
+                    raise ValueError(
+                        f"Mapped relationship {source_kind}.{link.name} uses a source attribute "
+                        f"from {link.source.source_attribute.class_.__name__!r}"
+                    )
+                target_provider = self._providers.get(link.target_kind)
+                if (
+                    target_provider is not None
+                    and link.source.target_attribute.class_ is not target_provider.orm_model
+                ):
+                    raise ValueError(
+                        f"Mapped relationship {source_kind}.{link.name} uses a target attribute "
+                        f"from {link.source.target_attribute.class_.__name__!r}"
+                    )
 
     def provider(self, kind: str) -> ResourceProvider[Any]:
         try:
@@ -236,7 +299,7 @@ class ResourceSchema:
             for link in self.links(current):
                 if (
                     link.traversal_semantics is not RelationshipSemantics.BELONGS_TO
-                    or link.source_selection is None
+                    or not link.queryable
                     or link.target_kind in visited
                 ):
                     continue
@@ -281,7 +344,7 @@ class ResourceSchema:
                 for source_kind in self._object_kinds
                 for link in self.links(source_kind)
                 if link.traversal_semantics is RelationshipSemantics.BELONGS_TO
-                and link.source_selection is not None
+                and link.queryable
             )
             for link_source, link in candidates:
                 if link_source == current:
@@ -323,6 +386,14 @@ class ResourceModel:
         selection: ObjectSelection[ObjectT],
     ) -> GraphFragment:
         objects = tuple(provider.find(db, selection))
+        return self.fragment(provider, objects)
+
+    def fragment(
+        self,
+        provider: ResourceProvider[ObjectT],
+        objects: tuple[ObjectT, ...],
+        link_names: frozenset[str] | None = None,
+    ) -> GraphFragment:
         known_kinds = {kind.name: kind for kind in self.schema.object_kinds}
         try:
             registered_kind = known_kinds[provider.kind.name]
@@ -339,6 +410,7 @@ class ResourceModel:
             (logical_object.ref, link, target)
             for logical_object in objects
             for link in self.schema.links(provider.kind.name)
+            if link_names is None or link.name in link_names
             for target in link.targets_for_source(logical_object)
         )
         for _, link, target in targets:
@@ -374,60 +446,88 @@ class ResourceModel:
     ) -> GraphFragment:
         """Resolve a kind using local or transitively reachable belongs-to properties."""
 
-        local_predicates: list[PropertyPredicate[Any]] = []
+        plan = self.plan_selection(kind, refs=refs, criteria=criteria)
+        return self.resolve_statement(db, self.schema.provider(kind), plan)
+
+    def plan_selection(
+        self,
+        kind: str,
+        *,
+        refs: frozenset[ObjectRef] | None = None,
+        criteria: tuple[PropertyCriterion, ...] = (),
+        orm_load: OrmLoadRequirement | None = None,
+        projection_links: tuple[LinkMember[Any], ...] = (),
+        related_entities: tuple[OrmEntityLoad, ...] = (),
+    ) -> Select[Any]:
+        """Lower a semantic selection to one unexecuted, JOIN-based statement."""
+
+        predicates: list[PropertyPredicate[Any]] = []
         constrained_refs = refs
+        joins: list[tuple[LinkMember[Any], bool]] = []
+
+        def add_join(link: LinkMember[Any], *, isouter: bool) -> None:
+            for index, (existing, existing_outer) in enumerate(joins):
+                if existing.source_kind == link.source_kind and existing.name == link.name:
+                    joins[index] = (existing, existing_outer and isouter)
+                    return
+            joins.append((link, isouter))
+
         for criterion in criteria:
             predicate = self.schema.predicate(criterion)
+            predicates.append(predicate)
             if criterion.path.root_kind == kind and not criterion.path.link_members:
-                local_predicates.append(predicate)
                 continue
-            matching_refs = self._matching_refs(db, kind, criterion.path, predicate)
-            constrained_refs = (
-                matching_refs if constrained_refs is None else constrained_refs & matching_refs
-            )
-
+            if criterion.path.root_kind == kind:
+                path = self.schema.path_links(criterion.path)
+            else:
+                path = (
+                    *self.schema.belongs_to_path(kind, criterion.path.root_kind),
+                    *self.schema.path_links(criterion.path),
+                )
+            for link in path:
+                if not link.queryable:
+                    raise ValueError(
+                        f"Object link {link.source_kind}.{link.name} cannot be used in SQL planning"
+                    )
+                add_join(link, isouter=False)
+        for link in projection_links:
+            if not link.queryable:
+                raise ValueError(
+                    f"Object link {link.source_kind}.{link.name} cannot be used in SQL planning"
+                )
+            add_join(link, isouter=True)
         provider = self.schema.provider(kind)
-        return self.resolve(
-            db,
-            provider,
-            ObjectSelection(refs=constrained_refs, predicates=tuple(local_predicates)),
-        )
+        statement = provider.statement(ObjectSelection(refs=constrained_refs))
+        for link, isouter in joins:
+            statement = link.apply_join(statement, isouter=isouter)
+        for predicate in predicates:
+            statement = predicate.apply(statement)
+        for entity in related_entities:
+            statement = statement.add_columns(self.schema.provider(entity.kind).orm_model)
+        if joins:
+            statement = statement.distinct()
+        if orm_load is not None:
+            statement = _apply_orm_load(statement, provider, orm_load)
+        for entity in related_entities:
+            statement = _apply_orm_load(
+                statement,
+                self.schema.provider(entity.kind),
+                entity.requirement,
+            )
+        return statement
 
-    def _matching_refs(
+    def resolve_statement(
         self,
         db: Session,
-        source_kind: str,
-        property_path: PropertyPath,
-        predicate: PropertyPredicate[Any],
-    ) -> frozenset[ObjectRef]:
-        target_fragment = self.resolve(
-            db,
-            self.schema.provider(property_path.property.object_kind),
-            ObjectSelection(predicates=(predicate,)),
-        )
-        target_refs = frozenset(obj.ref for obj in target_fragment.logical_objects)
-        for link in reversed(self.schema.path_links(property_path)):
-            if link.source_selection is None:
-                raise ValueError(f"Object link {link.source_kind}.{link.name} is not queryable")
-            source_fragment = self.resolve(
-                db,
-                self.schema.provider(link.source_kind),
-                link.source_selection(target_refs),
-            )
-            target_refs = frozenset(obj.ref for obj in source_fragment.logical_objects)
-        if source_kind == property_path.root_kind:
-            return target_refs
-        implicit_path = self.schema.belongs_to_path(source_kind, property_path.root_kind)
-        for link in reversed(implicit_path):
-            if link.source_selection is None:
-                raise ValueError(f"Object link {link.source_kind}.{link.name} is not queryable")
-            source_fragment = self.resolve(
-                db,
-                self.schema.provider(link.source_kind),
-                link.source_selection(target_refs),
-            )
-            target_refs = frozenset(obj.ref for obj in source_fragment.logical_objects)
-        return target_refs
+        provider: ResourceProvider[ObjectT],
+        statement: Select[Any],
+        *,
+        link_names: frozenset[str] | None = None,
+    ) -> GraphFragment:
+        """Resolve a previously planned provider statement."""
+
+        objects = tuple(provider.object_from_orm(row) for row in db.scalars(statement).unique())
+        return self.fragment(provider, objects, link_names)
 
     def traverse_refs(
         self,
@@ -452,14 +552,43 @@ class ResourceModel:
                     if isinstance(target, ObjectRef)
                 )
             else:
-                if link.source_selection is None:
-                    raise ValueError(f"Object link {link.source_kind}.{link.name} is not queryable")
                 fragment = self.resolve(
                     db,
                     self.schema.provider(link.source_kind),
-                    link.source_selection(current_refs),
+                    link.selection_for_targets(current_refs),
                 )
                 current_refs = frozenset(
                     logical_object.ref for logical_object in fragment.logical_objects
                 )
         return current_refs
+
+
+def _apply_orm_load(
+    statement: Select[Any],
+    provider: ResourceProvider[Any],
+    requirement: OrmLoadRequirement,
+) -> Select[Any]:
+    """Restrict one entity-returning provider statement to required mapped attributes."""
+
+    if requirement.whole_entity:
+        return statement
+    wrong_models = {
+        attribute.class_.__name__
+        for attribute in requirement.attributes
+        if attribute.class_ is not provider.orm_model
+    }
+    if wrong_models:
+        raise ValueError(
+            f"Hydration for {provider.kind.name!r} contains attributes from ORM models "
+            f"{sorted(wrong_models)}"
+        )
+    mapper = cast(Mapper[Any], inspect_orm(provider.orm_model))
+    identity_attributes = tuple(
+        mapper.get_property_by_column(column).class_attribute for column in mapper.primary_key
+    )
+    attributes = tuple(
+        dict.fromkeys((*identity_attributes, *requirement.attributes))
+    )
+    return statement.options(
+        load_only(*attributes, raiseload=True)
+    )

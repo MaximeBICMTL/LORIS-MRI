@@ -15,10 +15,12 @@ from sqlalchemy.orm import Session
 
 from loris_data_manager.inspection import (
     InspectionQuery,
+    execute_inspection_plan,
     format_inspection_json,
+    format_inspection_sql,
     format_inspection_text,
-    inspect_resources,
     parse_inspection_selection,
+    plan_inspection,
 )
 from loris_data_manager.provider import ResourceSchema
 from loris_data_manager.providers.core import register_core_schema
@@ -83,6 +85,13 @@ def inspect(
         typer.Option("--expand-related", help="Resolve directly related objects for context."),
     ] = False,
     output_format: Annotated[OutputFormat, typer.Option("--format")] = OutputFormat.TEXT,
+    print_sql: Annotated[
+        bool,
+        typer.Option(
+            "--print-sql",
+            help="Print the planned SQL without connecting to or querying the database.",
+        ),
+    ] = False,
 ) -> None:
     """Inspect logical LORIS objects and their bound resources."""
 
@@ -101,6 +110,10 @@ def inspect(
     config = load_config(profile)
     engine = get_database_engine(config.mysql)
     try:
+        plan = plan_inspection(schema, query)
+        if print_sql:
+            typer.echo(format_inspection_sql(plan, engine.dialect))
+            return
         with Session(engine) as db:
             storage_roots: dict[str, Path] = {}
             if any(selection.expression == "dicom-archive.file.size" for selection in query.selections):
@@ -110,7 +123,7 @@ def inspect(
                         "Missing tarchiveLibraryDir configuration for file inspection"
                     )
                 storage_roots["dicom-archive"] = Path(archive_root.value)
-            result = inspect_resources(db, schema, query, storage_roots=storage_roots)
+            result = execute_inspection_plan(db, plan, storage_roots=storage_roots)
             formatter = (
                 format_inspection_json
                 if output_format is OutputFormat.JSON

@@ -1,17 +1,17 @@
 """Core logical object and member definitions."""
 
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any
 
 from lib.db.models.project import DbProject
 from lib.db.models.session import DbSession
 from lib.db.models.site import DbSite
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import InstrumentedAttribute
 
 from loris_data_manager.provider import ResourceSchema
-from loris_data_manager.resources import DatabaseRowObject, ObjectRef, PhysicalObject
+from loris_data_manager.resources import DatabaseRowObject, ObjectRef
 from loris_data_manager.schema import (
     BOOLEAN_TYPE,
     INTEGER_TYPE,
@@ -20,9 +20,11 @@ from loris_data_manager.schema import (
     LinkMember,
     ObjectKind,
     ObjectSelection,
+    OrmColumnSource,
+    OrmEntitySource,
+    OrmForeignKeySource,
     PropertyQuery,
     RelationshipSemantics,
-    SelectionConstraint,
     ValueMember,
 )
 
@@ -30,7 +32,6 @@ SESSION_KIND = "session"
 PROJECT_KIND = "project"
 SITE_KIND = "site"
 DATABASE_ROW_KIND = "database-row"
-SourceT = TypeVar("SourceT")
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,29 +46,25 @@ class SessionObject:
 SESSION_ID = ValueMember[SessionObject, int, int](
     name="id",
     value_type=INTEGER_TYPE,
-    get_value=lambda obj, _: obj.orm.id,
-    query=PropertyQuery(INTEGER_TYPE, lambda query, value: query.where(DbSession.id == value)),
+    source=OrmColumnSource(DbSession.id),
+    query=PropertyQuery(INTEGER_TYPE),
 )
 SESSION_PARTICIPANT_ID = ValueMember[SessionObject, int, int](
     name="participant-id",
     value_type=INTEGER_TYPE,
-    get_value=lambda obj, _: obj.orm.candidate_id,
-    query=PropertyQuery(
-        INTEGER_TYPE, lambda query, value: query.where(DbSession.candidate_id == value)
-    ),
+    source=OrmColumnSource(DbSession.candidate_id),
+    query=PropertyQuery(INTEGER_TYPE),
 )
 SESSION_VISIT_LABEL = ValueMember[SessionObject, str, str](
     name="visit-label",
     value_type=STRING_TYPE,
-    get_value=lambda obj, _: obj.orm.visit_label,
-    query=PropertyQuery(
-        STRING_TYPE, lambda query, value: query.where(DbSession.visit_label == value)
-    ),
+    source=OrmColumnSource(DbSession.visit_label),
+    query=PropertyQuery(STRING_TYPE),
 )
 SESSION_ACTIVE = ValueMember[SessionObject, bool, object](
     name="active",
     value_type=BOOLEAN_TYPE,
-    get_value=lambda obj, _: obj.orm.active,
+    source=OrmColumnSource(DbSession.active),
 )
 
 
@@ -83,20 +80,20 @@ class ProjectObject:
 PROJECT_ID = ValueMember[ProjectObject, int, int](
     name="id",
     value_type=INTEGER_TYPE,
-    get_value=lambda obj, _: obj.orm.id,
-    query=PropertyQuery(INTEGER_TYPE, lambda query, value: query.where(DbProject.id == value)),
+    source=OrmColumnSource(DbProject.id),
+    query=PropertyQuery(INTEGER_TYPE),
 )
 PROJECT_NAME = ValueMember[ProjectObject, str, str](
     name="name",
     value_type=STRING_TYPE,
-    get_value=lambda obj, _: obj.orm.name,
-    query=PropertyQuery(STRING_TYPE, lambda query, value: query.where(DbProject.name == value)),
+    source=OrmColumnSource(DbProject.name),
+    query=PropertyQuery(STRING_TYPE),
 )
 PROJECT_ALIAS = ValueMember[ProjectObject, str, str](
     name="alias",
     value_type=STRING_TYPE,
-    get_value=lambda obj, _: obj.orm.alias,
-    query=PropertyQuery(STRING_TYPE, lambda query, value: query.where(DbProject.alias == value)),
+    source=OrmColumnSource(DbProject.alias),
+    query=PropertyQuery(STRING_TYPE),
 )
 
 
@@ -112,20 +109,20 @@ class SiteObject:
 SITE_ID = ValueMember[SiteObject, int, int](
     name="id",
     value_type=INTEGER_TYPE,
-    get_value=lambda obj, _: obj.orm.id,
-    query=PropertyQuery(INTEGER_TYPE, lambda query, value: query.where(DbSite.id == value)),
+    source=OrmColumnSource(DbSite.id),
+    query=PropertyQuery(INTEGER_TYPE),
 )
 SITE_NAME = ValueMember[SiteObject, str, str](
     name="name",
     value_type=STRING_TYPE,
-    get_value=lambda obj, _: obj.orm.name,
-    query=PropertyQuery(STRING_TYPE, lambda query, value: query.where(DbSite.name == value)),
+    source=OrmColumnSource(DbSite.name),
+    query=PropertyQuery(STRING_TYPE),
 )
 SITE_ALIAS = ValueMember[SiteObject, str, str](
     name="alias",
     value_type=STRING_TYPE,
-    get_value=lambda obj, _: obj.orm.alias,
-    query=PropertyQuery(STRING_TYPE, lambda query, value: query.where(DbSite.alias == value)),
+    source=OrmColumnSource(DbSite.alias),
+    query=PropertyQuery(STRING_TYPE),
 )
 
 
@@ -134,7 +131,7 @@ def _database_row_link(source_kind: str) -> LinkMember[Any]:
         name="row",
         source_kind=source_kind,
         target_kind=DATABASE_ROW_KIND,
-        targets_for_source=lambda obj: (DatabaseRowObject(obj.orm),),
+        source=OrmEntitySource(),
         lifecycle=LifecycleSemantics.OWNS,
     )
 
@@ -143,14 +140,7 @@ SESSION_PROJECT = LinkMember[SessionObject](
     name="project",
     source_kind=SESSION_KIND,
     target_kind=PROJECT_KIND,
-    targets_for_source=lambda obj: (ObjectRef(PROJECT_KIND, str(obj.orm.project_id)),),
-    source_selection=lambda refs: ObjectSelection(
-        constraints=(
-            SelectionConstraint(
-                lambda query: query.where(DbSession.project_id.in_(_target_ids(refs, PROJECT_KIND)))
-            ),
-        )
-    ),
+    source=OrmForeignKeySource(DbSession.project_id, DbProject.id),
     traversal_semantics=RelationshipSemantics.BELONGS_TO,
     lifecycle=LifecycleSemantics.REFERENCES,
     target_may_be_shared=True,
@@ -159,14 +149,7 @@ SESSION_SITE = LinkMember[SessionObject](
     name="site",
     source_kind=SESSION_KIND,
     target_kind=SITE_KIND,
-    targets_for_source=lambda obj: (ObjectRef(SITE_KIND, str(obj.orm.site_id)),),
-    source_selection=lambda refs: ObjectSelection(
-        constraints=(
-            SelectionConstraint(
-                lambda query: query.where(DbSession.site_id.in_(_target_ids(refs, SITE_KIND)))
-            ),
-        )
-    ),
+    source=OrmForeignKeySource(DbSession.site_id, DbSite.id),
     traversal_semantics=RelationshipSemantics.BELONGS_TO,
     lifecycle=LifecycleSemantics.REFERENCES,
     target_may_be_shared=True,
@@ -200,38 +183,68 @@ SESSION = ObjectKind(
 
 class SessionProvider:
     kind = SESSION
+    orm_model = DbSession
+    deferred_links = frozenset[str]()
 
-    def find(self, db: Session, selection: ObjectSelection[SessionObject]) -> tuple[SessionObject, ...]:
+    def statement(self, selection: ObjectSelection[SessionObject]):
         statement = select(DbSession)
         keys = selection.keys_for(SESSION.name)
         if keys is not None:
             statement = statement.where(DbSession.id.in_(_integer_keys(keys, SESSION.name)))
-        statement = selection.apply_filters(statement, _value_members(SESSION))
-        return tuple(SessionObject(row) for row in db.scalars(statement))
+        return selection.apply_filters(statement, _value_members(SESSION))
+
+    def object_from_orm(self, row: DbSession) -> SessionObject:
+        return SessionObject(row)
+
+    def load_steps(self, links: frozenset[str]):
+        return ()
+
+    def find(self, db: Session, selection: ObjectSelection[SessionObject]) -> tuple[SessionObject, ...]:
+        return tuple(self.object_from_orm(row) for row in db.scalars(self.statement(selection)))
 
 
 class ProjectProvider:
     kind = PROJECT
+    orm_model = DbProject
+    deferred_links = frozenset[str]()
 
-    def find(self, db: Session, selection: ObjectSelection[ProjectObject]) -> tuple[ProjectObject, ...]:
+    def statement(self, selection: ObjectSelection[ProjectObject]):
         statement = select(DbProject)
         keys = selection.keys_for(PROJECT.name)
         if keys is not None:
             statement = statement.where(DbProject.id.in_(_integer_keys(keys, PROJECT.name)))
-        statement = selection.apply_filters(statement, _value_members(PROJECT))
-        return tuple(ProjectObject(row) for row in db.scalars(statement))
+        return selection.apply_filters(statement, _value_members(PROJECT))
+
+    def object_from_orm(self, row: DbProject) -> ProjectObject:
+        return ProjectObject(row)
+
+    def load_steps(self, links: frozenset[str]):
+        return ()
+
+    def find(self, db: Session, selection: ObjectSelection[ProjectObject]) -> tuple[ProjectObject, ...]:
+        return tuple(self.object_from_orm(row) for row in db.scalars(self.statement(selection)))
 
 
 class SiteProvider:
     kind = SITE
+    orm_model = DbSite
+    deferred_links = frozenset[str]()
 
-    def find(self, db: Session, selection: ObjectSelection[SiteObject]) -> tuple[SiteObject, ...]:
+    def statement(self, selection: ObjectSelection[SiteObject]):
         statement = select(DbSite)
         keys = selection.keys_for(SITE.name)
         if keys is not None:
             statement = statement.where(DbSite.id.in_(_integer_keys(keys, SITE.name)))
-        statement = selection.apply_filters(statement, _value_members(SITE))
-        return tuple(SiteObject(row) for row in db.scalars(statement))
+        return selection.apply_filters(statement, _value_members(SITE))
+
+    def object_from_orm(self, row: DbSite) -> SiteObject:
+        return SiteObject(row)
+
+    def load_steps(self, links: frozenset[str]):
+        return ()
+
+    def find(self, db: Session, selection: ObjectSelection[SiteObject]) -> tuple[SiteObject, ...]:
+        return tuple(self.object_from_orm(row) for row in db.scalars(self.statement(selection)))
 
 
 def _value_members(kind: ObjectKind) -> tuple[ValueMember[Any, Any, Any], ...]:
@@ -243,13 +256,6 @@ def _integer_keys(keys: frozenset[str], kind: str) -> frozenset[int]:
         return frozenset(int(key) for key in keys)
     except ValueError as error:
         raise ValueError(f"References to {kind!r} must use integer keys") from error
-
-
-def _target_ids(refs: frozenset[ObjectRef], kind: str) -> frozenset[int]:
-    wrong_kinds = {ref.kind for ref in refs if ref.kind != kind}
-    if wrong_kinds:
-        raise ValueError(f"Expected {kind!r} references, got kinds {sorted(wrong_kinds)}")
-    return _integer_keys(frozenset(ref.key for ref in refs), kind)
 
 
 def register_core_schema(schema: ResourceSchema) -> None:
@@ -265,17 +271,15 @@ def register_core_schema(schema: ResourceSchema) -> None:
 def session_link(
     *,
     source_kind: str,
-    targets_for_source: Callable[[SourceT], tuple[ObjectRef | PhysicalObject, ...]],
-    source_selection: Callable[[frozenset[ObjectRef]], ObjectSelection[Any]],
-) -> LinkMember[SourceT]:
+    source_attribute: InstrumentedAttribute[Any],
+) -> LinkMember[Any]:
     """Define the conventional object-valued member from a module object to a session."""
 
     return LinkMember(
         name="session",
         source_kind=source_kind,
         target_kind=SESSION.name,
-        targets_for_source=targets_for_source,
-        source_selection=source_selection,
+        source=OrmForeignKeySource(source_attribute, DbSession.id),
         traversal_semantics=RelationshipSemantics.BELONGS_TO,
         lifecycle=LifecycleSemantics.REFERENCES,
         target_may_be_shared=True,

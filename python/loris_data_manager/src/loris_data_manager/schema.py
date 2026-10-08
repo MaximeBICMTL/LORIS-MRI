@@ -7,11 +7,14 @@ objects projected from those models and the relationships between those objects.
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Generic, Protocol, TypeAlias, TypeVar
+from typing import Any, Generic, Protocol, TypeAlias, TypeVar, cast
 
+from sqlalchemy.orm.attributes import InstrumentedAttribute
 from sqlalchemy.sql import Select
+from sqlalchemy.sql.elements import ColumnElement
 
 from loris_data_manager.resources import (
+    DatabaseRowObject,
     LocalPathObject,
     ObjectRef,
     PhysicalObject,
@@ -22,12 +25,82 @@ from loris_data_manager.resources import (
 ObjectT = TypeVar("ObjectT")
 ValueT = TypeVar("ValueT")
 FilterT = TypeVar("FilterT")
+SourceObjectT = TypeVar("SourceObjectT", contravariant=True)
+SourceValueT = TypeVar("SourceValueT", covariant=True)
 
 
 class PropertyReadContext(Protocol):
     """External services used while reading properties from resolved objects."""
 
     def local_path_size(self, obj: LocalPathObject) -> int: ...
+
+
+@dataclass(frozen=True, slots=True)
+class OrmLoadRequirement:
+    """Mapped ORM state required to materialize a semantic member."""
+
+    attributes: tuple[InstrumentedAttribute[Any], ...] = ()
+    whole_entity: bool = False
+
+    def __or__(self, other: "OrmLoadRequirement") -> "OrmLoadRequirement":
+        attributes = tuple(dict.fromkeys((*self.attributes, *other.attributes)))
+        return OrmLoadRequirement(
+            attributes=attributes,
+            whole_entity=self.whole_entity or other.whole_entity,
+        )
+
+
+class ValueSource(Protocol[SourceObjectT, SourceValueT]):
+    """Authoritative source for reading and hydrating a scalar value."""
+
+    def get_value(self, obj: SourceObjectT, context: PropertyReadContext) -> SourceValueT: ...
+
+    @property
+    def orm_load(self) -> OrmLoadRequirement: ...
+
+    @property
+    def query_expression(self) -> ColumnElement[Any] | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class CallableValueSource(Generic[ObjectT, ValueT]):
+    """Value source for non-ORM state or values supplied by external services."""
+
+    read: Callable[[ObjectT, PropertyReadContext], ValueT]
+
+    def get_value(self, obj: ObjectT, context: PropertyReadContext) -> ValueT:
+        return self.read(obj, context)
+
+    @property
+    def orm_load(self) -> OrmLoadRequirement:
+        return OrmLoadRequirement()
+
+    @property
+    def query_expression(self) -> None:
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class OrmColumnSource:
+    """Value read directly from one mapped attribute on ``obj.orm``."""
+
+    attribute: InstrumentedAttribute[Any]
+
+    def get_value(self, obj: Any, context: PropertyReadContext) -> Any:
+        del context
+        try:
+            orm = getattr(obj, "orm")
+        except AttributeError as error:
+            raise TypeError("An ORM column source requires an object with an 'orm' attribute") from error
+        return getattr(orm, self.attribute.key)
+
+    @property
+    def orm_load(self) -> OrmLoadRequirement:
+        return OrmLoadRequirement(attributes=(self.attribute,))
+
+    @property
+    def query_expression(self) -> ColumnElement[Any]:
+        return cast(ColumnElement[Any], self.attribute)
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +150,20 @@ class PropertyQuery(Generic[FilterT]):
     """The single query behavior currently supported by one property."""
 
     operand_type: PropertyType[FilterT]
-    apply: Callable[[Select[Any], FilterT], Select[Any]]
+    apply_comparison: Callable[
+        [Select[Any], ColumnElement[Any], FilterT], Select[Any]
+    ] = lambda statement, expression, value: statement.where(expression == value)
+
+    def apply(
+        self,
+        statement: Select[Any],
+        source: ValueSource[Any, Any],
+        value: FilterT,
+    ) -> Select[Any]:
+        expression = source.query_expression
+        if expression is None:
+            raise ValueError("A queryable property requires a SQL expression source")
+        return self.apply_comparison(statement, expression, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,8 +172,15 @@ class ValueMember(Generic[ObjectT, ValueT, FilterT]):
 
     name: str
     value_type: PropertyType[ValueT]
-    get_value: Callable[[ObjectT, PropertyReadContext], ValueT]
+    source: ValueSource[ObjectT, ValueT]
     query: PropertyQuery[FilterT] | None = None
+
+    def get_value(self, obj: ObjectT, context: PropertyReadContext) -> ValueT:
+        return self.source.get_value(obj, context)
+
+    @property
+    def orm_load(self) -> OrmLoadRequirement:
+        return self.source.orm_load
 
     @property
     def queryable(self) -> bool:
@@ -110,7 +203,7 @@ class ValueMember(Generic[ObjectT, ValueT, FilterT]):
 
         if self.query is None:
             raise ValueError(f"Property {self.name!r} is not queryable")
-        return self.query.apply(statement, value)
+        return self.query.apply(statement, self.source, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,6 +336,188 @@ class RelationshipSemantics(StrEnum):
     REFERENCES = "references"
 
 
+class LinkSource(Protocol[SourceObjectT]):
+    """Authoritative source for resolving and hydrating an object-valued member."""
+
+    def targets(
+        self,
+        obj: SourceObjectT,
+        target_kind: str,
+    ) -> tuple[ObjectRef | PhysicalObject, ...]: ...
+
+    @property
+    def orm_load(self) -> OrmLoadRequirement: ...
+
+    @property
+    def queryable(self) -> bool: ...
+
+    def join(self, statement: Select[Any], *, isouter: bool) -> Select[Any] | None: ...
+
+    def select_sources(
+        self,
+        refs: frozenset[ObjectRef],
+        target_kind: str,
+    ) -> ObjectSelection[Any] | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class CallableLinkSource(Generic[ObjectT]):
+    """Link source whose targets do not require anchor columns."""
+
+    resolve: Callable[[ObjectT], tuple[ObjectRef | PhysicalObject, ...]]
+
+    def targets(
+        self,
+        obj: ObjectT,
+        target_kind: str,
+    ) -> tuple[ObjectRef | PhysicalObject, ...]:
+        del target_kind
+        return self.resolve(obj)
+
+    @property
+    def orm_load(self) -> OrmLoadRequirement:
+        return OrmLoadRequirement()
+
+    @property
+    def queryable(self) -> bool:
+        return False
+
+    def join(self, statement: Select[Any], *, isouter: bool) -> None:
+        del statement, isouter
+        return None
+
+    def select_sources(
+        self,
+        refs: frozenset[ObjectRef],
+        target_kind: str,
+    ) -> None:
+        del refs, target_kind
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class OrmForeignKeySource:
+    """Logical-object reference derived from one mapped foreign-key attribute."""
+
+    source_attribute: InstrumentedAttribute[Any]
+    target_attribute: InstrumentedAttribute[Any]
+
+    def targets(self, obj: Any, target_kind: str) -> tuple[ObjectRef, ...]:
+        value = getattr(getattr(obj, "orm"), self.source_attribute.key)
+        return () if value is None else (ObjectRef(target_kind, str(value)),)
+
+    @property
+    def orm_load(self) -> OrmLoadRequirement:
+        return OrmLoadRequirement(attributes=(self.source_attribute,))
+
+    @property
+    def queryable(self) -> bool:
+        return True
+
+    def join(self, statement: Select[Any], *, isouter: bool) -> Select[Any]:
+        return statement.join(
+            self.target_attribute.class_,
+            self.source_attribute == self.target_attribute,
+            isouter=isouter,
+        )
+
+    def select_sources(
+        self,
+        refs: frozenset[ObjectRef],
+        target_kind: str,
+    ) -> ObjectSelection[Any]:
+        wrong_kinds = {ref.kind for ref in refs if ref.kind != target_kind}
+        if wrong_kinds:
+            raise ValueError(
+                f"Expected {target_kind!r} references, got kinds {sorted(wrong_kinds)}"
+            )
+        column = self.target_attribute.property.columns[0]
+        python_type = column.type.python_type
+        try:
+            values = tuple(python_type(ref.key) for ref in refs)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"References to {target_kind!r} are invalid for {column}"
+            ) from error
+        return ObjectSelection(
+            constraints=(
+                SelectionConstraint(
+                    lambda statement: statement.where(self.source_attribute.in_(values))
+                ),
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class OrmColumnLinkSource(Generic[ValueT]):
+    """Physical targets derived from the value of one mapped attribute."""
+
+    attribute: InstrumentedAttribute[Any]
+    resolve_value: Callable[[ValueT], tuple[ObjectRef | PhysicalObject, ...]]
+
+    def targets(
+        self,
+        obj: Any,
+        target_kind: str,
+    ) -> tuple[ObjectRef | PhysicalObject, ...]:
+        del target_kind
+        value = cast(ValueT, getattr(getattr(obj, "orm"), self.attribute.key))
+        return self.resolve_value(value)
+
+    @property
+    def orm_load(self) -> OrmLoadRequirement:
+        return OrmLoadRequirement(attributes=(self.attribute,))
+
+    @property
+    def queryable(self) -> bool:
+        return False
+
+    def join(self, statement: Select[Any], *, isouter: bool) -> None:
+        del statement, isouter
+        return None
+
+    def select_sources(
+        self,
+        refs: frozenset[ObjectRef],
+        target_kind: str,
+    ) -> None:
+        del refs, target_kind
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class OrmEntitySource:
+    """Physical database-row target backed by the complete mapped entity."""
+
+    def targets(
+        self,
+        obj: Any,
+        target_kind: str,
+    ) -> tuple[DatabaseRowObject[Any], ...]:
+        del target_kind
+        return (DatabaseRowObject(getattr(obj, "orm")),)
+
+    @property
+    def orm_load(self) -> OrmLoadRequirement:
+        return OrmLoadRequirement(whole_entity=True)
+
+    @property
+    def queryable(self) -> bool:
+        return False
+
+    def join(self, statement: Select[Any], *, isouter: bool) -> None:
+        del statement, isouter
+        return None
+
+    def select_sources(
+        self,
+        refs: frozenset[ObjectRef],
+        target_kind: str,
+    ) -> None:
+        del refs, target_kind
+        return None
+
+
 @dataclass(frozen=True, slots=True)
 class LinkMember(Generic[ObjectT]):
     """Object-valued member with optional query traversal and lifecycle behavior."""
@@ -250,11 +525,36 @@ class LinkMember(Generic[ObjectT]):
     name: str
     source_kind: str
     target_kind: str
-    targets_for_source: Callable[[ObjectT], tuple[ObjectRef | PhysicalObject, ...]]
-    source_selection: Callable[[frozenset[ObjectRef]], ObjectSelection[Any]] | None = None
+    source: LinkSource[ObjectT]
     traversal_semantics: RelationshipSemantics | None = None
     lifecycle: LifecycleSemantics | None = None
     target_may_be_shared: bool = False
+
+    def targets_for_source(self, obj: ObjectT) -> tuple[ObjectRef | PhysicalObject, ...]:
+        return self.source.targets(obj, self.target_kind)
+
+    @property
+    def orm_load(self) -> OrmLoadRequirement:
+        return self.source.orm_load
+
+    @property
+    def queryable(self) -> bool:
+        return self.source.queryable
+
+    def apply_join(self, statement: Select[Any], *, isouter: bool = False) -> Select[Any]:
+        joined = self.source.join(statement, isouter=isouter)
+        if joined is None:
+            raise ValueError(f"Object link {self.source_kind}.{self.name} cannot be used in SQL planning")
+        return joined
+
+    def selection_for_targets(
+        self,
+        refs: frozenset[ObjectRef],
+    ) -> ObjectSelection[Any]:
+        selection = self.source.select_sources(refs, self.target_kind)
+        if selection is None:
+            raise ValueError(f"Object link {self.source_kind}.{self.name} is not queryable")
+        return selection
 
 
 ObjectMember: TypeAlias = ValueMember[Any, Any, Any] | LinkMember[Any]

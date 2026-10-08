@@ -1,6 +1,7 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
@@ -11,12 +12,17 @@ from lib.db.models.mri_upload import DbMriUpload
 from lib.db.models.project import DbProject
 from lib.db.models.session import DbSession
 from lib.db.models.site import DbSite
-from sqlalchemy import select
+from sqlalchemy import event, select
+from sqlalchemy.dialects import mysql
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.orm import Session
 from typer.testing import CliRunner
 
+import loris_data_manager.cli as cli_module
 from loris_data_manager import (
     STRING_TYPE,
+    CallableLinkSource,
+    CallableValueSource,
     DatabaseRowObject,
     LifecycleSemantics,
     LinkMember,
@@ -25,6 +31,8 @@ from loris_data_manager import (
     ObjectKind,
     ObjectRef,
     ObjectSelection,
+    OrmColumnSource,
+    OrmForeignKeySource,
     PropertyRef,
     RelationshipSemantics,
     ResourceGraph,
@@ -37,9 +45,11 @@ from loris_data_manager.inspection import (
     FilesystemPropertyReadContext,
     InspectionQuery,
     format_inspection_json,
+    format_inspection_sql,
     format_inspection_text,
     inspect_resources,
     parse_inspection_selection,
+    plan_inspection,
 )
 from loris_data_manager.providers.core import (
     PROJECT,
@@ -203,6 +213,12 @@ def test_class_level_properties_read_and_query_orm_state(db: Session):
     assert matching == (logical_object,)
 
 
+def test_mapped_property_source_is_authoritative_for_reading_and_querying():
+    assert isinstance(DICOM_STUDY_UID.source, OrmColumnSource)
+    assert DICOM_STUDY_UID.source.attribute is DbDicomArchive.study_uid
+    assert DICOM_STUDY_UID.query is not None
+
+
 def test_selection_rejects_references_for_another_object_kind(db: Session):
     with pytest.raises(ValueError, match="references of kinds"):
         SessionProvider().find(
@@ -253,7 +269,7 @@ def test_schema_can_be_extended_without_modifying_core_types():
             ValueMember["GeneticDatasetObject", str, object](
                 name="assay",
                 value_type=STRING_TYPE,
-                get_value=lambda obj, _: obj.assay,
+                source=CallableValueSource(lambda obj, _: obj.assay),
             ),
         )
 
@@ -372,6 +388,222 @@ def test_cli_uses_kebab_case_schema_names_and_has_no_identity_flags():
     assert "--dicom-archive-id" not in inspect_help_result.output
 
 
+def test_printed_sql_uses_joins_and_can_be_planned_without_a_database():
+    schema = make_schema()
+    query = make_inspection_query(
+        schema,
+        ("dicom-archive.study-uid",),
+        ("project.alias=example", "site.alias=EX"),
+    )
+
+    output = format_inspection_sql(plan_inspection(schema, query), mysql.dialect())
+
+    assert "JOIN session" in output
+    assert "JOIN `Project`" in output
+    assert "JOIN psc" in output
+    assert "'example'" in output
+    assert "'EX'" in output
+    anchor_select = output.split("FROM", 1)[0]
+    assert "tarchive.`TarchiveID`" in anchor_select
+    assert "tarchive.`DicomArchiveID`" in anchor_select
+    assert "PatientName" not in anchor_select
+    assert "AcquisitionCount" not in anchor_select
+    assert "ArchiveLocation" not in anchor_select
+    assert "load DICOM series rows" not in output
+    assert "load DICOM file rows" not in output
+    assert "load MRI upload rows" not in output
+
+
+def test_cli_print_sql_does_not_open_a_database_session(monkeypatch: pytest.MonkeyPatch):
+    class EngineWithoutConnections:
+        dialect = mysql.dialect()
+
+        def dispose(self) -> None:
+            pass
+
+        def connect(self):
+            raise AssertionError("--print-sql must not connect to the database")
+
+    def load_config_without_io(profile: str | None) -> SimpleNamespace:
+        return SimpleNamespace(mysql=object())
+
+    def make_engine_without_connections(config: Any) -> EngineWithoutConnections:
+        return EngineWithoutConnections()
+
+    monkeypatch.setattr(cli_module, "load_config", load_config_without_io)
+    monkeypatch.setattr(
+        cli_module,
+        "get_database_engine",
+        make_engine_without_connections,
+    )
+
+    result = CliRunner().invoke(
+        app,
+        (
+            "inspect",
+            "--select",
+            "session.visit-label",
+            "--where",
+            "project.alias=example",
+            "--print-sql",
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert "JOIN `Project`" in result.output
+    assert "SELECT DISTINCT" in result.output
+
+
+def test_dicom_loading_is_projection_sensitive(db: Session):
+    archive = add_dicom_archive(db)
+    statements: list[str] = []
+
+    def record_statement(*args: Any) -> None:
+        statements.append(args[2])
+
+    assert db.bind is not None
+    event.listen(db.bind, "before_cursor_execute", record_statement)
+    try:
+        inspect_resources(
+            db,
+            make_schema(),
+            InspectionQuery(
+                selections=(inspection_selection("dicom-archive.study-uid"),),
+                criteria=parse_where_expressions((f"dicom-archive.id={archive.id}",)),
+            ),
+        )
+        assert len(statements) == 1
+
+        statements.clear()
+        inspect_resources(
+            db,
+            make_schema(),
+            InspectionQuery(
+                selections=(inspection_selection("dicom-archive"),),
+                criteria=parse_where_expressions((f"dicom-archive.id={archive.id}",)),
+            ),
+        )
+        assert len(statements) == 4
+    finally:
+        event.remove(db.bind, "before_cursor_execute", record_statement)
+
+
+def test_narrow_dicom_projection_raises_instead_of_lazy_loading_omitted_columns(db: Session):
+    archive_id = add_dicom_archive(db).id
+    db.expunge_all()
+
+    result = inspect_resources(
+        db,
+        make_schema(),
+        InspectionQuery(
+            selections=(inspection_selection("dicom-archive.study-uid"),),
+            criteria=parse_where_expressions((f"dicom-archive.id={archive_id}",)),
+        ),
+    )
+
+    logical_object = result.graph.get(ObjectRef(DICOM_ARCHIVE.name, str(archive_id)))
+    assert isinstance(logical_object, DicomArchiveObject)
+    assert DICOM_STUDY_UID.get_value(logical_object, READ_CONTEXT) == "1.2.3.4"
+    with pytest.raises(InvalidRequestError, match="raiseload"):
+        _ = logical_object.orm.patient_name
+
+
+def test_whole_dicom_sql_plan_contains_the_executed_collection_steps():
+    schema = make_schema()
+    query = make_inspection_query(
+        schema,
+        ("dicom-archive",),
+        ("dicom-archive.id=1",),
+    )
+
+    output = format_inspection_sql(plan_inspection(schema, query), mysql.dialect())
+
+    assert "load DICOM series rows" in output
+    assert "load DICOM file rows" in output
+    assert "load MRI upload rows" in output
+    assert output.count("IN (__anchor_ids)") == 3
+
+
+def test_related_property_projection_is_one_fully_planned_query(db: Session):
+    add_dicom_archive(db)
+    schema = make_schema()
+    query = InspectionQuery(
+        selections=(inspection_selection("dicom-archive.session.visit-label"),),
+        select_all=True,
+    )
+    output = format_inspection_sql(plan_inspection(schema, query), mysql.dialect())
+    statements: list[str] = []
+
+    def record_statement(*args: Any) -> None:
+        statements.append(args[2])
+
+    assert db.bind is not None
+    event.listen(db.bind, "before_cursor_execute", record_statement)
+    try:
+        result = inspect_resources(db, schema, query)
+    finally:
+        event.remove(db.bind, "before_cursor_execute", record_statement)
+
+    assert len(statements) == 1
+    assert "LEFT OUTER JOIN session" in output
+    assert "tarchive.`TarchiveID`" in output
+    assert "tarchive.`SessionID`" in output
+    assert "session.`ID`" in output
+    assert "session.`Visit_label`" in output
+    assert "runtime-dependent" not in output
+    assert result.selected == {ObjectRef(SESSION.name, "7")}
+    assert json.loads(format_inspection_json(result))["objects"] == [
+        {
+            "id": "session:7",
+            "kind": "session",
+            "key": "7",
+            "role": "selected",
+            "properties": {"visit-label": "V1"},
+        }
+    ]
+
+
+def test_transitive_related_property_projection_is_one_query(db: Session):
+    add_dicom_archive(db)
+    query = InspectionQuery(
+        selections=(inspection_selection("dicom-archive.session.project.name"),),
+        select_all=True,
+    )
+    statements: list[str] = []
+
+    def record_statement(*args: Any) -> None:
+        statements.append(args[2])
+
+    assert db.bind is not None
+    event.listen(db.bind, "before_cursor_execute", record_statement)
+    try:
+        result = inspect_resources(db, make_schema(), query)
+    finally:
+        event.remove(db.bind, "before_cursor_execute", record_statement)
+
+    assert len(statements) == 1
+    assert "LEFT OUTER JOIN session" in statements[0]
+    assert 'LEFT OUTER JOIN "Project"' in statements[0]
+    assert result.selected == {ObjectRef(PROJECT.name, "3")}
+
+
+def test_dicom_session_projection_does_not_infer_relationship_from_upload(db: Session):
+    archive = add_dicom_archive(db)
+    archive.session_id = None
+    db.flush()
+    query = InspectionQuery(
+        selections=(inspection_selection("dicom-archive.session.visit-label"),),
+        select_all=True,
+    )
+
+    result = inspect_resources(db, make_schema(), query)
+
+    assert result.selected == set()
+    assert {obj.ref for obj in result.graph.logical_objects} == {
+        ObjectRef(DICOM_ARCHIVE.name, str(archive.id))
+    }
+
+
 def test_schema_parses_text_criteria_with_the_property_query_operand_type():
     schema = make_schema()
 
@@ -418,7 +650,23 @@ def test_schema_rejects_relationships_with_unknown_endpoints():
                 name="unknown",
                 source_kind=SESSION.name,
                 target_kind="unknown",
-                targets_for_source=lambda obj: (),
+                source=CallableLinkSource(lambda obj: ()),
+            ),
+        )
+
+
+def test_schema_rejects_mapped_relationship_attributes_from_the_wrong_model():
+    schema = make_schema()
+
+    with pytest.raises(ValueError, match="uses a source attribute"):
+        schema.register_member(
+            DICOM_ARCHIVE.name,
+            LinkMember(
+                name="invalid-project",
+                source_kind=DICOM_ARCHIVE.name,
+                target_kind=PROJECT.name,
+                source=OrmForeignKeySource(DbSession.project_id, DbProject.id),
+                traversal_semantics=RelationshipSemantics.BELONGS_TO,
             ),
         )
 
@@ -665,16 +913,18 @@ def test_property_selection_uses_its_root_as_anchor_for_independent_filters(db: 
 
 def test_inspection_projects_non_queryable_local_file_size(db: Session, tmp_path: Path):
     archive = add_dicom_archive(db)
+    archive_id = archive.id
     archive_path = tmp_path / "2026" / "archive.tar"
     archive_path.parent.mkdir()
     archive_path.write_bytes(b"dicom archive")
+    db.expunge_all()
 
     result = inspect_resources(
         db,
         make_schema(),
         InspectionQuery(
             selections=(inspection_selection("dicom-archive.file.size"),),
-            criteria=parse_where_expressions((f"dicom-archive.id={archive.id}",)),
+            criteria=parse_where_expressions((f"dicom-archive.id={archive_id}",)),
         ),
         storage_roots={"dicom-archive": tmp_path},
     )
@@ -752,8 +1002,7 @@ def test_property_selection_rejects_ambiguous_belongs_to_paths(db: Session):
             name="project",
             source_kind=DICOM_ARCHIVE.name,
             target_kind=PROJECT.name,
-            targets_for_source=lambda obj: (),
-            source_selection=lambda refs: ObjectSelection(),
+            source=OrmForeignKeySource(DbDicomArchive.session_id, DbProject.id),
             traversal_semantics=RelationshipSemantics.BELONGS_TO,
         ),
     )

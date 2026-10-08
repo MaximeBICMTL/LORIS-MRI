@@ -90,6 +90,18 @@ models:
   composable partial resource graphs.
 
 The package's `loris-data-manager inspect` command is a read-only CLI with text and JSON output.
+`--print-sql` builds the inspection plan without connecting to the database, prints its
+JOIN-based anchor query and any runtime-dependent provider query templates, and does not execute
+the plan. The same provider load steps drive SQL rendering and execution. Loading is
+projection-sensitive: selecting a scalar DICOM archive property does not load its series, file,
+or MRI-upload rows, while selecting the whole archive schedules those collection queries in
+bounded batches. ORM-backed value and link sources are also column-sensitive: they are the single
+definitions for runtime value extraction and mapped-attribute hydration, so narrow projections
+load only the anchor identity and mapped attributes they actually consume. Omitted attributes use
+SQLAlchemy raiseload behavior rather than issuing implicit lazy queries. Explicit mapped
+foreign-key projection paths are planned as one joined, multi-entity statement; the same mapped
+source and target attributes define forward references, joins, reverse constraints, and source
+hydration.
 Repeatable `--select` expressions project whole logical objects or individual properties, while
 repeatable qualified `--where` filters constrain the query and are combined using AND. Object IDs
 are ordinary typed, queryable semantic properties. Explicit relationship paths such as
@@ -114,9 +126,10 @@ related context; it is not required for property filtering, relationship-path tr
 composition. Generalizing expansion across registered object kinds is therefore deferred until a
 consumer needs complete contextual graphs or configurable traversal.
 
-Important schema finding: current DICOM import code sets `tarchive.SessionID` to `NULL`; session
-association commonly comes through `mri_upload(TarchiveID, SessionID)`. Providers must account for
-both paths.
+The semantic `dicom-archive.session` relationship is currently defined only by
+`tarchive.SessionID -> session.ID`. A reachable `mri_upload(TarchiveID, SessionID)` row does not
+create or supplement that relationship. Alternative or inferred relationship paths should be
+designed only when a concrete consumer requires them.
 
 ## Open design work
 
