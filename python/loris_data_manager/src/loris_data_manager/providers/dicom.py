@@ -10,7 +10,7 @@ from lib.db.models.dicom_archive_file import DbDicomArchiveFile
 from lib.db.models.dicom_archive_series import DbDicomArchiveSeries
 from lib.db.models.mri_upload import DbMriUpload
 from sqlalchemy import select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
 
 from loris_data_manager.graph import GraphFragment
@@ -27,6 +27,7 @@ from loris_data_manager.schema import (
     CallableValueSource,
     LifecycleSemantics,
     LinkMember,
+    LoadPolicy,
     ObjectKind,
     ObjectLink,
     ObjectSelection,
@@ -61,6 +62,7 @@ LOCAL_PATH_SIZE = ValueMember[LocalPathObject, int, object](
     name="size",
     value_type=INTEGER_TYPE,
     source=CallableValueSource(lambda obj, context: context.local_path_size(obj)),
+    load_policy=LoadPolicy.ON_DEMAND,
 )
 LOCAL_PATH = ObjectKind(
     LOCAL_PATH_KIND,
@@ -127,6 +129,7 @@ DICOM_ARCHIVE_SERIES_ROWS = LinkMember[DicomArchiveObject](
         lambda obj: tuple(DatabaseRowObject(row) for row in obj.orm.series)
     ),
     lifecycle=LifecycleSemantics.OWNS,
+    load_policy=LoadPolicy.ON_DEMAND,
 )
 DICOM_ARCHIVE_FILE_ROWS = LinkMember[DicomArchiveObject](
     name="file-row",
@@ -136,6 +139,7 @@ DICOM_ARCHIVE_FILE_ROWS = LinkMember[DicomArchiveObject](
         lambda obj: tuple(DatabaseRowObject(row) for row in obj.orm.files)
     ),
     lifecycle=LifecycleSemantics.OWNS,
+    load_policy=LoadPolicy.ON_DEMAND,
 )
 DICOM_ARCHIVE_UPLOAD_ROWS = LinkMember[DicomArchiveObject](
     name="upload-row",
@@ -145,6 +149,7 @@ DICOM_ARCHIVE_UPLOAD_ROWS = LinkMember[DicomArchiveObject](
         lambda obj: tuple(DatabaseRowObject(row) for row in obj.orm.mri_uploads)
     ),
     lifecycle=LifecycleSemantics.REFERENCES,
+    load_policy=LoadPolicy.ON_DEMAND,
 )
 DICOM_ARCHIVE_FILE = LinkMember[DicomArchiveObject](
     name="file",
@@ -241,12 +246,7 @@ class DicomArchiveProvider:
         db: Session,
         selection: ObjectSelection[DicomArchiveObject],
     ) -> tuple[DicomArchiveObject, ...]:
-        statement = self.statement(selection).options(
-            selectinload(DbDicomArchive.series),
-            selectinload(DbDicomArchive.files),
-            selectinload(DbDicomArchive.mri_uploads),
-        )
-        return tuple(self.object_from_orm(row) for row in db.scalars(statement))
+        return tuple(self.object_from_orm(row) for row in db.scalars(self.statement(selection)))
 
 
 def _database_row_load_step(

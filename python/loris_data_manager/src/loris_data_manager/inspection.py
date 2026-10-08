@@ -31,6 +31,7 @@ from loris_data_manager.resources import (
 )
 from loris_data_manager.schema import (
     LinkMember,
+    LoadPolicy,
     OrmLoadRequirement,
     PropertyCriterion,
     PropertyPath,
@@ -91,6 +92,7 @@ class InspectionResult:
     graph: ResourceGraph
     selected: frozenset[ResourceRef]
     projections: tuple[tuple[InspectionSelection, frozenset[ResourceRef]], ...]
+    loaded_links: frozenset[tuple[ResourceRef, PropertyRef]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,10 +160,12 @@ def _plan_entities(
         path = selection.property_path
         if path is None and selection.target_kind == anchor_kind:
             for member in schema.properties(anchor_kind):
-                requirements[()] |= member.orm_load
+                if member.load_policy is LoadPolicy.DEFAULT:
+                    requirements[()] |= member.orm_load
             for link in schema.links(anchor_kind):
-                requirements[()] |= link.orm_load
-                links_by_path[()].add(link.name)
+                if link.load_policy is LoadPolicy.DEFAULT:
+                    requirements[()] |= link.orm_load
+                    links_by_path[()].add(link.name)
             continue
         if path is None:
             raise ValueError(
@@ -267,6 +271,7 @@ def execute_inspection_plan(
     selected: set[ResourceRef] = set()
     rows = tuple(db.execute(plan.primary_statement).unique())
     fragments: dict[tuple[str, ...], GraphFragment] = {}
+    loaded_links: set[tuple[ResourceRef, PropertyRef]] = set()
     for index, entity in enumerate(plan.entities):
         provider = schema.provider(entity.kind)
         objects_by_ref: dict[ObjectRef, Any] = {}
@@ -283,6 +288,11 @@ def execute_inspection_plan(
         )
         fragments[entity.path] = fragment
         graph.add(fragment)
+        loaded_links.update(
+            (obj.ref, PropertyRef(entity.kind, link_name))
+            for obj in fragment.logical_objects
+            for link_name in entity.links
+        )
     anchor_fragment = fragments[()]
     anchor_refs = frozenset(obj.ref for obj in anchor_fragment.logical_objects)
     for step in plan.load_steps:
@@ -320,6 +330,7 @@ def execute_inspection_plan(
         graph=graph,
         selected=frozenset(selected),
         projections=tuple(projections),
+        loaded_links=frozenset(loaded_links),
     )
 
 
@@ -418,14 +429,23 @@ def format_inspection_text(result: InspectionResult) -> str:
         role = "selected" if obj.ref in result.selected else "related"
         lines.extend(("", f"{obj.ref} [{role}]", "  Properties:"))
         for member in _displayed_properties(result, obj):
-            lines.append(f"    {member.name}: {member.get_value(obj, result.read_context)}")
+            if _property_is_loaded(result, obj, member.name):
+                lines.append(f"    {member.name}: {member.get_value(obj, result.read_context)}")
+            else:
+                lines.append(f"    {member.name} [on-demand]: not loaded")
         links = tuple(link for link in result.graph.links if link.source == obj.ref)
-        if links:
+        unloaded_links = _unloaded_on_demand_links(result, obj)
+        if links or unloaded_links:
             lines.append("  Links:")
             for link in sorted(links, key=lambda item: str(item.member)):
                 definition = result.schema.link(link.member.object_kind, link.member.property_name)
                 metadata = definition.lifecycle.value if definition.lifecycle is not None else "link"
                 lines.append(f"    {link.member.property_name} [{metadata}] -> {link.target}")
+            for definition in unloaded_links:
+                metadata = definition.lifecycle.value if definition.lifecycle is not None else "link"
+                lines.append(
+                    f"    {definition.name} [{metadata}; on-demand]: not loaded"
+                )
     return "\n".join(lines)
 
 
@@ -478,8 +498,20 @@ def _object_document(result: InspectionResult, obj: ResourceObject) -> dict[str,
         "properties": {
             member.name: member.get_value(obj, result.read_context)
             for member in _displayed_properties(result, obj)
+            if _property_is_loaded(result, obj, member.name)
         },
     }
+    unloaded_properties = [
+        member.name
+        for member in _displayed_properties(result, obj)
+        if not _property_is_loaded(result, obj, member.name)
+    ]
+    unloaded_links = [definition.name for definition in _unloaded_on_demand_links(result, obj)]
+    if unloaded_properties or unloaded_links:
+        document["unloaded"] = {
+            "properties": unloaded_properties,
+            "links": unloaded_links,
+        }
     if isinstance(obj.ref, ObjectRef):
         document["key"] = obj.ref.key
     if isinstance(obj, DatabaseRowObject):
@@ -507,6 +539,37 @@ def _displayed_properties(result: InspectionResult, obj: ResourceObject):
     selected_names = _selected_property_names(result, obj.ref)
     return tuple(
         member for member in properties if selected_names is None or member.name in selected_names
+    )
+
+
+def _property_is_loaded(result: InspectionResult, obj: ResourceObject, name: str) -> bool:
+    selected_names = _selected_property_names(result, obj.ref)
+    if selected_names is not None:
+        return name in selected_names
+    kind = result.schema.kind_for_object(obj).name
+    member = result.schema.property(PropertyRef(kind, name))
+    return member.load_policy is LoadPolicy.DEFAULT
+
+
+def _unloaded_on_demand_links(
+    result: InspectionResult,
+    obj: ResourceObject,
+) -> tuple[LinkMember[Any], ...]:
+    if not _has_whole_object_projection(result, obj.ref):
+        return ()
+    kind = result.schema.kind_for_object(obj).name
+    return tuple(
+        link
+        for link in result.schema.links(kind)
+        if link.load_policy is LoadPolicy.ON_DEMAND
+        and (obj.ref, PropertyRef(kind, link.name)) not in result.loaded_links
+    )
+
+
+def _has_whole_object_projection(result: InspectionResult, ref: ResourceRef) -> bool:
+    return any(
+        selection.property_name is None and ref in refs
+        for selection, refs in result.projections
     )
 
 

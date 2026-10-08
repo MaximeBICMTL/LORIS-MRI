@@ -12,6 +12,7 @@ from loris_data_manager.graph import GraphFragment
 from loris_data_manager.resources import ObjectRef, ResourceObject
 from loris_data_manager.schema import (
     LinkMember,
+    LoadPolicy,
     LogicalObject,
     ObjectKind,
     ObjectLink,
@@ -384,11 +385,17 @@ class ResourceModel:
             if not isinstance(logical_object, registered_kind.object_type):
                 raise TypeError(f"Invalid object class for {logical_object.ref}")
 
+        if link_names is None:
+            link_names = frozenset(
+                link.name
+                for link in self.schema.links(provider.kind.name)
+                if link.load_policy is LoadPolicy.DEFAULT
+            )
         targets = tuple(
             (logical_object.ref, link, target)
             for logical_object in objects
             for link in self.schema.links(provider.kind.name)
-            if link_names is None or link.name in link_names
+            if link.name in link_names
             for target in link.targets_for_source(logical_object)
         )
         for _, link, target in targets:

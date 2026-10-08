@@ -50,6 +50,13 @@ class OrmLoadRequirement:
         )
 
 
+class LoadPolicy(StrEnum):
+    """Whether a member participates in an object's default projection."""
+
+    DEFAULT = "default"
+    ON_DEMAND = "on-demand"
+
+
 class ValueSource(Protocol[SourceObjectT, SourceValueT]):
     """Authoritative source for reading and hydrating a scalar value."""
 
@@ -174,6 +181,7 @@ class ValueMember(Generic[ObjectT, ValueT, FilterT]):
     value_type: PropertyType[ValueT]
     source: ValueSource[ObjectT, ValueT]
     query: PropertyQuery[FilterT] | None = None
+    load_policy: LoadPolicy = LoadPolicy.DEFAULT
 
     def get_value(self, obj: ObjectT, context: PropertyReadContext) -> ValueT:
         return self.source.get_value(obj, context)
@@ -544,6 +552,7 @@ class LinkMember(Generic[ObjectT]):
     traversal_semantics: RelationshipSemantics | None = None
     lifecycle: LifecycleSemantics | None = None
     target_may_be_shared: bool = False
+    load_policy: LoadPolicy = LoadPolicy.DEFAULT
 
     def targets_for_source(self, obj: ObjectT) -> tuple[ObjectRef | PhysicalObject, ...]:
         return self.source.targets(obj, self.target_kind)

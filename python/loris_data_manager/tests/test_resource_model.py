@@ -26,6 +26,7 @@ from loris_data_manager import (
     DatabaseRowObject,
     LifecycleSemantics,
     LinkMember,
+    LoadPolicy,
     LocalPathObject,
     LocalPathType,
     ObjectKind,
@@ -60,8 +61,12 @@ from loris_data_manager.providers.core import (
 )
 from loris_data_manager.providers.dicom import (
     DICOM_ARCHIVE,
+    DICOM_ARCHIVE_FILE_ROWS,
+    DICOM_ARCHIVE_SERIES_ROWS,
+    DICOM_ARCHIVE_UPLOAD_ROWS,
     DICOM_PATIENT_NAME,
     DICOM_STUDY_UID,
+    LOCAL_PATH_SIZE,
     DicomArchiveObject,
     DicomArchiveProvider,
     register_dicom_schema,
@@ -147,7 +152,7 @@ def add_dicom_archive(db: Session) -> DbDicomArchive:
     return archive
 
 
-def test_resolves_typed_logical_object_with_database_and_file_resources(db: Session):
+def test_resolves_typed_logical_object_with_default_database_and_file_resources(db: Session):
     archive = add_dicom_archive(db)
     model = ResourceModel(make_schema())
 
@@ -172,19 +177,19 @@ def test_resolves_typed_logical_object_with_database_and_file_resources(db: Sess
         "patient-name": "DCC001_000001_V1",
         "acquisition-count": 1,
     }
-    assert len(fragment.physical_objects) == 5
-    assert sum(isinstance(obj, DatabaseRowObject) for obj in fragment.physical_objects) == 4
+    assert len(fragment.physical_objects) == 2
+    assert sum(isinstance(obj, DatabaseRowObject) for obj in fragment.physical_objects) == 1
     assert sum(isinstance(obj, LocalPathObject) for obj in fragment.physical_objects) == 1
     assert sum(
         make_schema().link(binding.member.object_kind, binding.member.property_name).lifecycle
         is LifecycleSemantics.OWNS
         for binding in fragment.links
-    ) == 4
+    ) == 2
     assert sum(
         make_schema().link(binding.member.object_kind, binding.member.property_name).lifecycle
         is LifecycleSemantics.REFERENCES
         for binding in fragment.links
-    ) == 2
+    ) == 1
     graph = ResourceGraph()
     graph.add(fragment)
     for physical_object in fragment.physical_objects:
@@ -257,9 +262,9 @@ def test_composes_independently_resolved_provider_fragments(db: Session):
     )
     assert graph.unresolved_refs() == {ObjectRef(PROJECT.name, "3"), ObjectRef(SITE.name, "1")}
     assert len(graph.logical_objects) == 2
-    assert len(graph.physical_objects) == 6
-    assert len(graph.objects) == 8
-    assert len(graph.links) == 9
+    assert len(graph.physical_objects) == 3
+    assert len(graph.objects) == 5
+    assert len(graph.links) == 6
 
 
 def test_schema_can_be_extended_without_modifying_core_types():
@@ -485,7 +490,7 @@ def test_dicom_loading_is_projection_sensitive(db: Session):
                 criteria=parse_where_expressions((f"dicom-archive.id={archive.id}",)),
             ),
         )
-        assert len(statements) == 4
+        assert len(statements) == 1
     finally:
         event.remove(db.bind, "before_cursor_execute", record_statement)
 
@@ -510,7 +515,7 @@ def test_narrow_dicom_projection_raises_instead_of_lazy_loading_omitted_columns(
         _ = logical_object.orm.patient_name
 
 
-def test_whole_dicom_sql_plan_contains_the_executed_collection_steps():
+def test_whole_dicom_sql_plan_omits_on_demand_collection_steps():
     schema = make_schema()
     query = make_inspection_query(
         schema,
@@ -520,10 +525,19 @@ def test_whole_dicom_sql_plan_contains_the_executed_collection_steps():
 
     output = format_inspection_sql(plan_inspection(schema, query), mysql.dialect())
 
-    assert "load DICOM series rows" in output
-    assert "load DICOM file rows" in output
-    assert "load MRI upload rows" in output
-    assert output.count("IN (__anchor_ids)") == 3
+    assert "load DICOM series rows" not in output
+    assert "load DICOM file rows" not in output
+    assert "load MRI upload rows" not in output
+    assert "IN (__anchor_ids)" not in output
+
+
+def test_expensive_members_are_declared_on_demand():
+    assert LOCAL_PATH_SIZE.load_policy is LoadPolicy.ON_DEMAND
+    assert {
+        DICOM_ARCHIVE_SERIES_ROWS.load_policy,
+        DICOM_ARCHIVE_FILE_ROWS.load_policy,
+        DICOM_ARCHIVE_UPLOAD_ROWS.load_policy,
+    } == {LoadPolicy.ON_DEMAND}
 
 
 def test_related_property_projection_is_one_fully_planned_query(db: Session):
@@ -1128,6 +1142,9 @@ def test_inspection_can_expand_related_session_and_render_text_and_json(db: Sess
     assert "session:7 [related]" in text
     assert "row [owns] -> database-row:tarchive" in text
     assert "file [owns] -> local-path:dicom-archive:2026/archive.tar" in text
+    assert "series-row [owns; on-demand]: not loaded" in text
+    assert "file-row [owns; on-demand]: not loaded" in text
+    assert "upload-row [references; on-demand]: not loaded" in text
 
     document = json.loads(format_inspection_json(result))
     assert document["selected"] == [f"dicom-archive:{archive.id}"]
@@ -1142,6 +1159,14 @@ def test_inspection_can_expand_related_session_and_render_text_and_json(db: Sess
         "owns",
         "references",
     }
+    archive_document = next(
+        item for item in document["objects"] if item["id"] == f"dicom-archive:{archive.id}"
+    )
+    assert archive_document["unloaded"]["links"] == [
+        "series-row",
+        "file-row",
+        "upload-row",
+    ]
 
 
 def test_inspection_requires_a_selector_unless_all_is_explicit():
