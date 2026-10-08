@@ -11,7 +11,7 @@ from typing import Any, Generic, Protocol, TypeAlias, TypeVar
 
 from sqlalchemy.sql import Select
 
-from lib.resource_model.resources import (
+from loris_data_manager.resources import (
     LocalPathObject,
     ObjectRef,
     PhysicalObject,

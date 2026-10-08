@@ -1,8 +1,8 @@
 """Experimental logical resource model layered above the LORIS ORM."""
 
-from lib.resource_model.graph import GraphFragment, ResourceGraph
-from lib.resource_model.provider import ResourceModel, ResourceProvider, ResourceSchema
-from lib.resource_model.resources import (
+from loris_data_manager.graph import GraphFragment, ResourceGraph
+from loris_data_manager.provider import ResourceModel, ResourceProvider, ResourceSchema
+from loris_data_manager.resources import (
     DatabaseRowObject,
     DatabaseRowRef,
     LocalPathObject,
@@ -14,7 +14,7 @@ from lib.resource_model.resources import (
     ResourceObject,
     ResourceRef,
 )
-from lib.resource_model.schema import (
+from loris_data_manager.schema import (
     BOOLEAN_TYPE,
     INTEGER_SET_TYPE,
     INTEGER_TUPLE_TYPE,

@@ -5,10 +5,9 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Any, Generic, Protocol, TypeAlias, TypeVar, cast
 
+from lib.db.base import Base
 from sqlalchemy import Table, and_, inspect
 from sqlalchemy.sql.elements import ColumnElement
-
-from lib.db.base import Base
 
 DatabaseValue: TypeAlias = object
 DatabaseKey: TypeAlias = tuple[tuple[str, DatabaseValue], ...]

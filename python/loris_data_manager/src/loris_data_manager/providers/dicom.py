@@ -4,18 +4,18 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
+from lib.db.models.dicom_archive import DbDicomArchive
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from lib.db.models.dicom_archive import DbDicomArchive
-from lib.resource_model.provider import ResourceSchema
-from lib.resource_model.providers.core import (
+from loris_data_manager.provider import ResourceSchema
+from loris_data_manager.providers.core import (
     DATABASE_ROW_KIND,
     SESSION,
     session_link,
 )
-from lib.resource_model.resources import DatabaseRowObject, LocalPathObject, LocalPathType, ObjectRef
-from lib.resource_model.schema import (
+from loris_data_manager.resources import DatabaseRowObject, LocalPathObject, LocalPathType, ObjectRef
+from loris_data_manager.schema import (
     INTEGER_TYPE,
     STRING_TYPE,
     LifecycleSemantics,

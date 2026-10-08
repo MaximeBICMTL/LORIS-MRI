@@ -72,7 +72,8 @@ design can be tested through a useful vertical slice.
 
 ## Current proof of concept
 
-The experimental code is under `python/lib/resource_model/`. It currently models:
+The experimental code is in the `python/loris_data_manager/` workspace package. It currently
+models:
 
 - sessions;
 - projects and sites as shared session context;
@@ -83,7 +84,8 @@ The experimental code is under `python/lib/resource_model/`. It currently models
 - typed logical and physical resource objects, explicit resource bindings, generic selections, and
   composable partial resource graphs.
 
-`python/scripts/inspect_resources.py` is a read-only CLI with text and JSON output. Repeatable
+The package's `inspect_resources` command is a read-only CLI with text and JSON output;
+`python/scripts/inspect_resources.py` remains as a compatibility entry point. Repeatable
 `--select` expressions project whole logical objects or individual properties, while repeatable
 qualified `--where` filters constrain the query and are combined using AND. Object IDs are
 ordinary typed, queryable semantic properties. Explicit relationship paths such as
@@ -141,10 +143,8 @@ ambiguous relationships should fail closed for destructive operations.
 Run from the repository root:
 
 ```bash
-uv run ruff check python/lib/resource_model python/scripts/inspect_resources.py \
-  python/tests/unit/resource_model
-uv run pyright python/lib/resource_model python/scripts/inspect_resources.py \
-  python/tests/unit/resource_model
+uv run ruff check python/loris_data_manager python/scripts/inspect_resources.py
+uv run pyright python/loris_data_manager python/scripts/inspect_resources.py
 uv run pytest
 ```
 

@@ -3,8 +3,8 @@
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
-from lib.resource_model.resources import PhysicalObject, PhysicalObjectRef, ResourceObject, ResourceRef
-from lib.resource_model.schema import LogicalObject, ObjectLink, ObjectRef
+from loris_data_manager.resources import PhysicalObject, PhysicalObjectRef, ResourceObject, ResourceRef
+from loris_data_manager.schema import LogicalObject, ObjectLink, ObjectRef
 
 
 @dataclass(frozen=True, slots=True)

@@ -5,9 +5,9 @@ from typing import Any, Protocol, TypeVar
 
 from sqlalchemy.orm import Session
 
-from lib.resource_model.graph import GraphFragment
-from lib.resource_model.resources import ObjectRef, ResourceObject
-from lib.resource_model.schema import (
+from loris_data_manager.graph import GraphFragment
+from loris_data_manager.resources import ObjectRef, ResourceObject
+from loris_data_manager.schema import (
     LinkMember,
     LogicalObject,
     ObjectKind,

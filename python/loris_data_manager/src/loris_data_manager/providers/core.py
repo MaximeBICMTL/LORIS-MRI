@@ -4,15 +4,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
 from lib.db.models.project import DbProject
 from lib.db.models.session import DbSession
 from lib.db.models.site import DbSite
-from lib.resource_model.provider import ResourceSchema
-from lib.resource_model.resources import DatabaseRowObject, ObjectRef, PhysicalObject
-from lib.resource_model.schema import (
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from loris_data_manager.provider import ResourceSchema
+from loris_data_manager.resources import DatabaseRowObject, ObjectRef, PhysicalObject
+from loris_data_manager.schema import (
     BOOLEAN_TYPE,
     INTEGER_TYPE,
     STRING_TYPE,

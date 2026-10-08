@@ -8,11 +8,10 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from lib.resource_model.graph import GraphFragment, ResourceGraph
-from lib.resource_model.provider import ResourceModel, ResourceSchema
-from lib.resource_model.providers.core import PROJECT, SESSION, SITE, register_core_schema
-from lib.resource_model.providers.dicom import register_dicom_schema
-from lib.resource_model.resources import (
+from loris_data_manager.graph import GraphFragment, ResourceGraph
+from loris_data_manager.provider import ResourceModel, ResourceSchema
+from loris_data_manager.providers.core import PROJECT, SESSION, SITE
+from loris_data_manager.resources import (
     DatabaseRowObject,
     LocalPathObject,
     LocalPathType,
@@ -21,7 +20,7 @@ from lib.resource_model.resources import (
     ResourceObject,
     ResourceRef,
 )
-from lib.resource_model.schema import (
+from loris_data_manager.schema import (
     PropertyCriterion,
     PropertyPath,
     PropertyReadContext,
@@ -84,11 +83,11 @@ class InspectionResult:
 
 def inspect_resources(
     db: Session,
+    schema: ResourceSchema,
     query: InspectionQuery,
     *,
     storage_roots: Mapping[str, Path] | None = None,
 ) -> InspectionResult:
-    schema = make_resource_schema()
     model = ResourceModel(schema)
     graph = ResourceGraph()
     selected: set[ResourceRef] = set()
@@ -199,13 +198,6 @@ def _expand_related(db: Session, model: ResourceModel, graph: ResourceGraph) -> 
         keys = frozenset(int(ref.key) for ref in graph.unresolved_refs() if ref.kind == kind.name)
         if keys:
             graph.add(model.select_objects(db, kind.name, refs=_refs(kind.name, keys)))
-
-
-def make_resource_schema() -> ResourceSchema:
-    schema = ResourceSchema()
-    register_core_schema(schema)
-    register_dicom_schema(schema)
-    return schema
 
 
 def _refs(kind: str, keys: frozenset[int]) -> frozenset[ObjectRef]:

@@ -4,9 +4,6 @@ from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
 from lib.db.models.dicom_archive import DbDicomArchive
 from lib.db.models.dicom_archive_file import DbDicomArchiveFile
 from lib.db.models.dicom_archive_series import DbDicomArchiveSeries
@@ -14,7 +11,10 @@ from lib.db.models.mri_upload import DbMriUpload
 from lib.db.models.project import DbProject
 from lib.db.models.session import DbSession
 from lib.db.models.site import DbSite
-from lib.resource_model import (
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from loris_data_manager import (
     STRING_TYPE,
     DatabaseRowObject,
     LifecycleSemantics,
@@ -31,7 +31,9 @@ from lib.resource_model import (
     ResourceSchema,
     ValueMember,
 )
-from lib.resource_model.inspection import (
+from loris_data_manager.cli import main as inspect_main
+from loris_data_manager.cli import make_parser, parse_where_expressions
+from loris_data_manager.inspection import (
     FilesystemPropertyReadContext,
     InspectionQuery,
     format_inspection_json,
@@ -39,14 +41,14 @@ from lib.resource_model.inspection import (
     inspect_resources,
     parse_inspection_selection,
 )
-from lib.resource_model.providers.core import (
+from loris_data_manager.providers.core import (
     PROJECT,
     SESSION,
     SITE,
     SessionProvider,
     register_core_schema,
 )
-from lib.resource_model.providers.dicom import (
+from loris_data_manager.providers.dicom import (
     DICOM_ARCHIVE,
     DICOM_PATIENT_NAME,
     DICOM_STUDY_UID,
@@ -54,8 +56,6 @@ from lib.resource_model.providers.dicom import (
     DicomArchiveProvider,
     register_dicom_schema,
 )
-from scripts.inspect_resources import main as inspect_main
-from scripts.inspect_resources import make_parser, parse_where_expressions
 
 READ_CONTEXT = FilesystemPropertyReadContext({})
 
@@ -344,6 +344,7 @@ def test_object_ids_are_queryable_semantic_properties(db: Session):
     for kind, expression, expected in cases:
         result = inspect_resources(
             db,
+            make_schema(),
             InspectionQuery(
                 selections=(inspection_selection(kind),),
                 criteria=parse_where_expressions((expression,)),
@@ -452,6 +453,7 @@ def test_inspection_composes_project_and_visit_selectors_across_providers(db: Se
 
     result = inspect_resources(
         db,
+        make_schema(),
         InspectionQuery(
             selections=(inspection_selection("dicom-archive"),),
             criteria=parse_where_expressions(
@@ -475,6 +477,7 @@ def test_inspection_selects_projects_and_sites_by_dynamic_properties(db: Session
 
     project_result = inspect_resources(
         db,
+        make_schema(),
         InspectionQuery(
             selections=(inspection_selection("project"),),
             criteria=parse_where_expressions(("project.alias=example",)),
@@ -482,6 +485,7 @@ def test_inspection_selects_projects_and_sites_by_dynamic_properties(db: Session
     )
     site_result = inspect_resources(
         db,
+        make_schema(),
         InspectionQuery(
             selections=(inspection_selection("site"),),
             criteria=parse_where_expressions(("site.alias=EX",)),
@@ -497,6 +501,7 @@ def test_project_and_site_properties_scope_sessions_without_leaking_scope_object
 
     result = inspect_resources(
         db,
+        make_schema(),
         InspectionQuery(
             selections=(inspection_selection("session"),),
             criteria=parse_where_expressions(
@@ -558,6 +563,7 @@ def test_inspection_accepts_dynamic_qualified_property_criteria(db: Session):
 
     result = inspect_resources(
         db,
+        make_schema(),
         InspectionQuery(
             selections=(inspection_selection("dicom-archive"),),
             criteria=parse_where_expressions(
@@ -578,6 +584,7 @@ def test_inspection_accepts_explicit_relationship_property_paths(db: Session):
 
     session_result = inspect_resources(
         db,
+        make_schema(),
         InspectionQuery(
             selections=(inspection_selection("session"),),
             criteria=parse_where_expressions(("session.project.name=Example Project",)),
@@ -585,6 +592,7 @@ def test_inspection_accepts_explicit_relationship_property_paths(db: Session):
     )
     dicom_result = inspect_resources(
         db,
+        make_schema(),
         InspectionQuery(
             selections=(inspection_selection("dicom-archive"),),
             criteria=parse_where_expressions(
@@ -602,6 +610,7 @@ def test_implicit_lookup_can_precede_an_explicit_relationship_path(db: Session):
 
     result = inspect_resources(
         db,
+        make_schema(),
         InspectionQuery(
             selections=(inspection_selection("dicom-archive"),),
             criteria=parse_where_expressions(("session.project.id=3",)),
@@ -616,6 +625,7 @@ def test_property_selection_uses_its_root_as_anchor_for_independent_filters(db: 
 
     result = inspect_resources(
         db,
+        make_schema(),
         InspectionQuery(
             selections=(inspection_selection("dicom-archive.study-uid"),),
             criteria=parse_where_expressions(
@@ -652,6 +662,7 @@ def test_inspection_projects_non_queryable_local_file_size(db: Session, tmp_path
 
     result = inspect_resources(
         db,
+        make_schema(),
         InspectionQuery(
             selections=(inspection_selection("dicom-archive.file.size"),),
             criteria=parse_where_expressions((f"dicom-archive.id={archive.id}",)),
@@ -684,6 +695,7 @@ def test_inspection_follows_local_file_symlink_for_size(db: Session, tmp_path: P
 
     result = inspect_resources(
         db,
+        make_schema(),
         InspectionQuery(
             selections=(inspection_selection("dicom-archive.file.size"),),
             criteria=parse_where_expressions((f"dicom-archive.id={archive.id}",)),
@@ -748,6 +760,7 @@ def test_project_expansion_does_not_reverse_traverse_to_sessions(db: Session):
 
     result = inspect_resources(
         db,
+        make_schema(),
         InspectionQuery(
             selections=(inspection_selection("project"),),
             criteria=parse_where_expressions(("project.alias=example",)),
@@ -764,6 +777,7 @@ def test_dicom_inspection_does_not_display_scoping_sessions_without_matches(db: 
 
     result = inspect_resources(
         db,
+        make_schema(),
         InspectionQuery(
             selections=(inspection_selection("dicom-archive"),),
             criteria=parse_where_expressions(
@@ -786,6 +800,7 @@ def test_inspection_can_expand_related_session_and_render_text_and_json(db: Sess
 
     result = inspect_resources(
         db,
+        make_schema(),
         InspectionQuery(
             selections=(inspection_selection("dicom-archive"),),
             criteria=parse_where_expressions((f"dicom-archive.id={archive.id}",)),

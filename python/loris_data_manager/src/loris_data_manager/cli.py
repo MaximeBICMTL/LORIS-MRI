@@ -6,21 +6,31 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
-from sqlalchemy.orm import Session
-
 from lib.config_file import load_config
 from lib.db.connect import get_database_engine
 from lib.db.queries.config import try_get_config_with_setting_name
-from lib.resource_model.inspection import (
+from sqlalchemy.orm import Session
+
+from loris_data_manager.inspection import (
     InspectionQuery,
     format_inspection_json,
     format_inspection_text,
     inspect_resources,
-    make_resource_schema,
     parse_inspection_selection,
 )
-from lib.resource_model.provider import ResourceSchema
-from lib.resource_model.schema import PropertyCriterion
+from loris_data_manager.provider import ResourceSchema
+from loris_data_manager.providers.core import register_core_schema
+from loris_data_manager.providers.dicom import register_dicom_schema
+from loris_data_manager.schema import PropertyCriterion
+
+
+def make_resource_schema() -> ResourceSchema:
+    """Compose the resource schema provided by this LORIS installation."""
+
+    schema = ResourceSchema()
+    register_core_schema(schema)
+    register_dicom_schema(schema)
+    return schema
 
 
 def make_parser() -> argparse.ArgumentParser:
@@ -83,7 +93,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if archive_root is None or archive_root.value is None:
                     parser.error("Missing tarchiveLibraryDir configuration for file inspection")
                 storage_roots["dicom-archive"] = Path(archive_root.value)
-            result = inspect_resources(db, query, storage_roots=storage_roots)
+            result = inspect_resources(db, schema, query, storage_roots=storage_roots)
             formatter = format_inspection_json if args.format == "json" else format_inspection_text
             output = formatter(result)
     finally:
