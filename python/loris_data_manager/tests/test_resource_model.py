@@ -21,6 +21,7 @@ from typer.testing import CliRunner
 import loris_data_manager.cli as cli_module
 from loris_data_manager import (
     STRING_TYPE,
+    BatchLinkSource,
     CallableLinkSource,
     CallableValueSource,
     DatabaseRowObject,
@@ -1066,6 +1067,72 @@ def test_inspection_selects_physical_file_object_with_default_members(db: Sessio
             "unloaded": {"properties": ["size"], "links": []},
         }
     ]
+
+
+def test_whole_object_reached_at_runtime_loads_its_default_links(db: Session):
+    archive = add_dicom_archive(db)
+    schema = make_schema()
+    schema.register_member(
+        "local-path",
+        LinkMember[LocalPathObject](
+            name="archive-row",
+            source_kind="local-path",
+            target_kind="database-row",
+            source=CallableLinkSource(lambda obj: (DatabaseRowObject(archive),)),
+        ),
+    )
+
+    result = inspect_resources(
+        db,
+        schema,
+        InspectionQuery(
+            selections=(parse_inspection_selection(schema, "dicom-archive.file"),),
+            criteria=parse_where_expressions((f"dicom-archive.id={archive.id}",)),
+        ),
+    )
+
+    file_ref = LocalPathRef("dicom-archive", PurePosixPath("2026/archive.tar"))
+    assert any(
+        link.source == file_ref and link.member == MemberRef("local-path", "archive-row")
+        for link in result.graph.links
+    )
+
+
+def test_batch_link_rejects_a_target_of_the_wrong_kind(db: Session):
+    archive = add_dicom_archive(db)
+    schema = make_schema()
+    schema.register_member(
+        DICOM_ARCHIVE.name,
+        LinkMember[DicomArchiveObject](
+            name="invalid-batch",
+            source_kind=DICOM_ARCHIVE.name,
+            target_kind="database-row",
+            source=BatchLinkSource(
+                name="load invalid targets",
+                input_name="dicom_archive_ids",
+                statement_for_keys=lambda keys: select(DbDicomArchiveSeries).where(
+                    DbDicomArchiveSeries.archive_id.in_(keys)
+                ),
+                input_key=lambda ref: int(ref.key) if isinstance(ref, ObjectRef) else ref,
+                target_from_row=lambda row: (
+                    ObjectRef(DICOM_ARCHIVE.name, str(row.archive_id)),
+                    ObjectRef(SESSION.name, "7"),
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Invalid target kind"):
+        inspect_resources(
+            db,
+            schema,
+            InspectionQuery(
+                selections=(
+                    parse_inspection_selection(schema, "dicom-archive.invalid-batch"),
+                ),
+                criteria=parse_where_expressions((f"dicom-archive.id={archive.id}",)),
+            ),
+        )
 
 
 def test_inspection_selects_to_many_collection_member_in_one_batch(db: Session):

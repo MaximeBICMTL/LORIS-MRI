@@ -210,20 +210,23 @@ def _plan_entities(
             requirements.setdefault(current_path, OrmLoadRequirement())
             kinds.setdefault(current_path, link.target_kind)
             properties_by_path.setdefault(current_path, set())
-        if current_path not in requirements:
-            continue
         if path.property is not None:
-            property_definition = schema.property(path.property)
-            requirements[current_path] |= property_definition.orm_load
-            properties_by_path[current_path].add(property_definition.name)
+            if current_path in requirements:
+                property_definition = schema.property(path.property)
+                requirements[current_path] |= property_definition.orm_load
+                properties_by_path[current_path].add(property_definition.name)
         else:
             for member in schema.properties(path.target_kind):
-                if member.load_policy is LoadPolicy.DEFAULT:
+                if (
+                    member.load_policy is LoadPolicy.DEFAULT
+                    and current_path in requirements
+                ):
                     requirements[current_path] |= member.orm_load
                     properties_by_path[current_path].add(member.name)
             for link in schema.links(path.target_kind):
                 if link.load_policy is LoadPolicy.DEFAULT:
-                    requirements[current_path] |= link.orm_load
+                    if current_path in requirements:
+                        requirements[current_path] |= link.orm_load
                     request_link(current_path, link, hydrate_target=False)
 
     entities = tuple(
@@ -439,6 +442,17 @@ def _load_link(
         raise ValueError(
             f"Link {link.source_kind}.{link.name} returned targets for unexpected sources"
         )
+    target_kind = schema.object_kind(link.target_kind)
+    for _, target in resolved:
+        if isinstance(target, ObjectRef):
+            if target.kind != link.target_kind:
+                raise ValueError(
+                    f"Invalid target kind for link {link.source_kind}.{link.name}"
+                )
+        elif not isinstance(target, target_kind.object_type):
+            raise TypeError(
+                f"Invalid target object for link {link.source_kind}.{link.name}"
+            )
     graph.add(
         GraphFragment(
             physical_objects=tuple(
