@@ -28,7 +28,9 @@ from loris_data_manager import (
     LinkMember,
     LoadPolicy,
     LocalPathObject,
+    LocalPathRef,
     LocalPathType,
+    MemberRef,
     ObjectKind,
     ObjectRef,
     ObjectSelection,
@@ -181,12 +183,12 @@ def test_resolves_typed_logical_object_with_default_database_and_file_resources(
     assert sum(isinstance(obj, DatabaseRowObject) for obj in fragment.physical_objects) == 1
     assert sum(isinstance(obj, LocalPathObject) for obj in fragment.physical_objects) == 1
     assert sum(
-        make_schema().link(binding.member.object_kind, binding.member.property_name).lifecycle
+        make_schema().link(binding.member.object_kind, binding.member.member_name).lifecycle
         is LifecycleSemantics.OWNS
         for binding in fragment.links
     ) == 2
     assert sum(
-        make_schema().link(binding.member.object_kind, binding.member.property_name).lifecycle
+        make_schema().link(binding.member.object_kind, binding.member.member_name).lifecycle
         is LifecycleSemantics.REFERENCES
         for binding in fragment.links
     ) == 1
@@ -342,6 +344,32 @@ def test_schema_resolves_explicit_relationship_property_paths():
         "session",
         "project",
     )
+
+
+def test_projection_paths_are_prefix_complete_for_logical_and_physical_objects():
+    schema = make_schema()
+
+    cases = (
+        ("dicom-archive", DICOM_ARCHIVE.name, (), None),
+        ("dicom-archive.session", SESSION.name, ("session",), None),
+        (
+            "dicom-archive.session.visit-label",
+            SESSION.name,
+            ("session",),
+            "visit-label",
+        ),
+        ("dicom-archive.file", "local-path", ("file",), None),
+        ("dicom-archive.file.size", "local-path", ("file",), "size"),
+        ("dicom-archive.series-row", "database-row", ("series-row",), None),
+    )
+
+    for expression, target_kind, links, property_name in cases:
+        path = schema.projection_path(expression)
+        assert path.target_kind == target_kind
+        assert path.link_members == links
+        assert (
+            None if path.property is None else path.property.property_name
+        ) == property_name
 
 
 def test_schema_rejects_unknown_relationship_property_paths():
@@ -1008,6 +1036,116 @@ def test_inspection_projects_non_queryable_local_file_size(db: Session, tmp_path
 
     with pytest.raises(ValueError, match="not queryable"):
         parse_where_expressions(("dicom-archive.file.size=1",))
+
+
+def test_inspection_selects_physical_file_object_with_default_members(db: Session):
+    archive = add_dicom_archive(db)
+
+    result = inspect_resources(
+        db,
+        make_schema(),
+        InspectionQuery(
+            selections=(inspection_selection("dicom-archive.file"),),
+            criteria=parse_where_expressions((f"dicom-archive.id={archive.id}",)),
+        ),
+    )
+
+    file_ref = LocalPathRef("dicom-archive", PurePosixPath("2026/archive.tar"))
+    assert result.selected == {file_ref}
+    document = json.loads(format_inspection_json(result))
+    assert document["objects"] == [
+        {
+            "id": "local-path:dicom-archive:2026/archive.tar",
+            "kind": "local-path",
+            "role": "selected",
+            "properties": {
+                "storage-root": "dicom-archive",
+                "relative-path": "2026/archive.tar",
+                "expected-type": "file",
+            },
+            "unloaded": {"properties": ["size"], "links": []},
+        }
+    ]
+
+
+def test_inspection_selects_to_many_collection_member_in_one_batch(db: Session):
+    archive = add_dicom_archive(db)
+    schema = make_schema()
+    query = InspectionQuery(
+        selections=(inspection_selection("dicom-archive.series-row"),),
+        criteria=parse_where_expressions((f"dicom-archive.id={archive.id}",)),
+    )
+    statements: list[str] = []
+
+    def record_statement(*args: Any) -> None:
+        statements.append(args[2])
+
+    assert db.bind is not None
+    event.listen(db.bind, "before_cursor_execute", record_statement)
+    try:
+        result = inspect_resources(db, schema, query)
+    finally:
+        event.remove(db.bind, "before_cursor_execute", record_statement)
+
+    assert len(statements) == 2
+    assert len(result.selected) == 1
+    assert all(str(ref).startswith("database-row:tarchive_series:") for ref in result.selected)
+    assert (
+        ObjectRef(DICOM_ARCHIVE.name, str(archive.id)),
+        MemberRef(DICOM_ARCHIVE.name, "series-row"),
+    ) in result.loaded_members
+    sql = format_inspection_sql(plan_inspection(schema, query), mysql.dialect())
+    assert "load DICOM series rows" in sql
+    assert "load DICOM file rows" not in sql
+    assert "load MRI upload rows" not in sql
+
+
+def test_empty_to_many_projection_is_distinct_from_no_anchor_match(db: Session):
+    archive = add_dicom_archive(db)
+    for row in db.scalars(select(DbDicomArchiveFile)):
+        db.delete(row)
+    for row in db.scalars(select(DbDicomArchiveSeries)):
+        db.delete(row)
+    db.flush()
+
+    result = inspect_resources(
+        db,
+        make_schema(),
+        InspectionQuery(
+            selections=(inspection_selection("dicom-archive.series-row"),),
+            criteria=parse_where_expressions((f"dicom-archive.id={archive.id}",)),
+        ),
+    )
+
+    archive_ref = ObjectRef(DICOM_ARCHIVE.name, str(archive.id))
+    assert result.matched == {archive_ref}
+    assert result.selected == set()
+    assert (archive_ref, MemberRef(DICOM_ARCHIVE.name, "series-row")) in result.loaded_members
+    assert format_inspection_text(result) == (
+        "Matched 1 anchor object(s); the requested projection selected no objects."
+    )
+
+
+def test_inspection_selects_intermediate_logical_object_with_default_members(db: Session):
+    archive = add_dicom_archive(db)
+
+    result = inspect_resources(
+        db,
+        make_schema(),
+        InspectionQuery(
+            selections=(inspection_selection("dicom-archive.session"),),
+            criteria=parse_where_expressions((f"dicom-archive.id={archive.id}",)),
+        ),
+    )
+
+    assert result.selected == {ObjectRef(SESSION.name, "7")}
+    document = json.loads(format_inspection_json(result))
+    assert document["objects"][0]["properties"] == {
+        "id": 7,
+        "participant-id": 11,
+        "visit-label": "V1",
+        "active": True,
+    }
 
 
 def test_inspection_follows_local_file_symlink_for_size(db: Session, tmp_path: Path):

@@ -1,9 +1,7 @@
 """Proof-of-concept DICOM archive projection."""
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
 
 from lib.db.models.dicom_archive import DbDicomArchive
 from lib.db.models.dicom_archive_file import DbDicomArchiveFile
@@ -11,10 +9,8 @@ from lib.db.models.dicom_archive_series import DbDicomArchiveSeries
 from lib.db.models.mri_upload import DbMriUpload
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from sqlalchemy.sql import Select
 
-from loris_data_manager.graph import GraphFragment
-from loris_data_manager.provider import ProviderLoadStep, ResourceSchema
+from loris_data_manager.provider import ResourceSchema
 from loris_data_manager.providers.core import (
     DATABASE_ROW_KIND,
     session_link,
@@ -23,19 +19,17 @@ from loris_data_manager.resources import DatabaseRowObject, LocalPathObject, Loc
 from loris_data_manager.schema import (
     INTEGER_TYPE,
     STRING_TYPE,
-    CallableLinkSource,
+    BatchLinkSource,
     CallableValueSource,
     LifecycleSemantics,
     LinkMember,
     LoadPolicy,
     ObjectKind,
-    ObjectLink,
     ObjectSelection,
     OrmColumnLinkSource,
     OrmColumnSource,
     OrmEntitySource,
     PropertyQuery,
-    PropertyRef,
     ValueMember,
 )
 
@@ -125,8 +119,17 @@ DICOM_ARCHIVE_SERIES_ROWS = LinkMember[DicomArchiveObject](
     name="series-row",
     source_kind=DICOM_ARCHIVE_KIND,
     target_kind=DATABASE_ROW_KIND,
-    source=CallableLinkSource(
-        lambda obj: tuple(DatabaseRowObject(row) for row in obj.orm.series)
+    source=BatchLinkSource(
+        name="load DICOM series rows",
+        input_name="dicom_archive_ids",
+        statement_for_keys=lambda keys: select(DbDicomArchiveSeries).where(
+            DbDicomArchiveSeries.archive_id.in_(keys)
+        ),
+        input_key=lambda ref: int(ref.key) if isinstance(ref, ObjectRef) else ref,
+        target_from_row=lambda row: (
+            ObjectRef(DICOM_ARCHIVE_KIND, str(row.archive_id)),
+            DatabaseRowObject(row),
+        ),
     ),
     lifecycle=LifecycleSemantics.OWNS,
     load_policy=LoadPolicy.ON_DEMAND,
@@ -135,8 +138,17 @@ DICOM_ARCHIVE_FILE_ROWS = LinkMember[DicomArchiveObject](
     name="file-row",
     source_kind=DICOM_ARCHIVE_KIND,
     target_kind=DATABASE_ROW_KIND,
-    source=CallableLinkSource(
-        lambda obj: tuple(DatabaseRowObject(row) for row in obj.orm.files)
+    source=BatchLinkSource(
+        name="load DICOM file rows",
+        input_name="dicom_archive_ids",
+        statement_for_keys=lambda keys: select(DbDicomArchiveFile).where(
+            DbDicomArchiveFile.archive_id.in_(keys)
+        ),
+        input_key=lambda ref: int(ref.key) if isinstance(ref, ObjectRef) else ref,
+        target_from_row=lambda row: (
+            ObjectRef(DICOM_ARCHIVE_KIND, str(row.archive_id)),
+            DatabaseRowObject(row),
+        ),
     ),
     lifecycle=LifecycleSemantics.OWNS,
     load_policy=LoadPolicy.ON_DEMAND,
@@ -145,8 +157,17 @@ DICOM_ARCHIVE_UPLOAD_ROWS = LinkMember[DicomArchiveObject](
     name="upload-row",
     source_kind=DICOM_ARCHIVE_KIND,
     target_kind=DATABASE_ROW_KIND,
-    source=CallableLinkSource(
-        lambda obj: tuple(DatabaseRowObject(row) for row in obj.orm.mri_uploads)
+    source=BatchLinkSource(
+        name="load MRI upload rows",
+        input_name="dicom_archive_ids",
+        statement_for_keys=lambda keys: select(DbMriUpload).where(
+            DbMriUpload.dicom_archive_id.in_(keys)
+        ),
+        input_key=lambda ref: int(ref.key) if isinstance(ref, ObjectRef) else ref,
+        target_from_row=lambda row: (
+            ObjectRef(DICOM_ARCHIVE_KIND, str(row.dicom_archive_id)),
+            DatabaseRowObject(row),
+        ),
     ),
     lifecycle=LifecycleSemantics.REFERENCES,
     load_policy=LoadPolicy.ON_DEMAND,
@@ -189,13 +210,6 @@ DICOM_ARCHIVE = ObjectKind(
 class DicomArchiveProvider:
     kind = DICOM_ARCHIVE
     orm_model = DbDicomArchive
-    deferred_links = frozenset(
-        {
-            DICOM_ARCHIVE_SERIES_ROWS.name,
-            DICOM_ARCHIVE_FILE_ROWS.name,
-            DICOM_ARCHIVE_UPLOAD_ROWS.name,
-        }
-    )
 
     def statement(self, selection: ObjectSelection[DicomArchiveObject]):
         statement = select(DbDicomArchive)
@@ -210,99 +224,12 @@ class DicomArchiveProvider:
     def object_from_orm(self, row: DbDicomArchive) -> DicomArchiveObject:
         return DicomArchiveObject(row)
 
-    def load_steps(self, links: frozenset[str]) -> tuple[ProviderLoadStep, ...]:
-        steps: list[ProviderLoadStep] = []
-        if DICOM_ARCHIVE_SERIES_ROWS.name in links:
-            steps.append(
-                _database_row_load_step(
-                    DICOM_ARCHIVE_SERIES_ROWS,
-                    "load DICOM series rows",
-                    _series_statement,
-                    _series_source_id,
-                )
-            )
-        if DICOM_ARCHIVE_FILE_ROWS.name in links:
-            steps.append(
-                _database_row_load_step(
-                    DICOM_ARCHIVE_FILE_ROWS,
-                    "load DICOM file rows",
-                    _file_statement,
-                    _file_source_id,
-                )
-            )
-        if DICOM_ARCHIVE_UPLOAD_ROWS.name in links:
-            steps.append(
-                _database_row_load_step(
-                    DICOM_ARCHIVE_UPLOAD_ROWS,
-                    "load MRI upload rows",
-                    _upload_statement,
-                    _upload_source_id,
-                )
-            )
-        return tuple(steps)
-
     def find(
         self,
         db: Session,
         selection: ObjectSelection[DicomArchiveObject],
     ) -> tuple[DicomArchiveObject, ...]:
         return tuple(self.object_from_orm(row) for row in db.scalars(self.statement(selection)))
-
-
-def _database_row_load_step(
-    link: LinkMember[DicomArchiveObject],
-    name: str,
-    statement_for_keys: Callable[[Any], Select[Any]],
-    source_id: Callable[[Any], int | None],
-) -> ProviderLoadStep:
-    def fragment_from_rows(rows: tuple[Any, ...]) -> GraphFragment:
-        physical = tuple(DatabaseRowObject(row) for row in rows)
-        return GraphFragment(
-            physical_objects=physical,
-            links=tuple(
-                ObjectLink(
-                    member=PropertyRef(DICOM_ARCHIVE.name, link.name),
-                    source=ObjectRef(DICOM_ARCHIVE.name, str(source_id(row))),
-                    target=obj.ref,
-                )
-                for row, obj in zip(rows, physical, strict=True)
-            ),
-        )
-
-    return ProviderLoadStep(
-        name=name,
-        input_name="anchor_ids",
-        input_kind=DICOM_ARCHIVE.name,
-        statement_for_keys=statement_for_keys,
-        fragment_from_rows=fragment_from_rows,
-    )
-
-
-def _series_statement(keys: Any) -> Select[Any]:
-    return select(DbDicomArchiveSeries).where(DbDicomArchiveSeries.archive_id.in_(keys))
-
-
-def _series_source_id(row: Any) -> int:
-    assert isinstance(row, DbDicomArchiveSeries)
-    return row.archive_id
-
-
-def _file_statement(keys: Any) -> Select[Any]:
-    return select(DbDicomArchiveFile).where(DbDicomArchiveFile.archive_id.in_(keys))
-
-
-def _file_source_id(row: Any) -> int:
-    assert isinstance(row, DbDicomArchiveFile)
-    return row.archive_id
-
-
-def _upload_statement(keys: Any) -> Select[Any]:
-    return select(DbMriUpload).where(DbMriUpload.dicom_archive_id.in_(keys))
-
-
-def _upload_source_id(row: Any) -> int | None:
-    assert isinstance(row, DbMriUpload)
-    return row.dicom_archive_id
 
 
 def _integer_keys(keys: frozenset[str], kind: str) -> frozenset[int]:

@@ -233,6 +233,21 @@ class SelectionConstraint(Generic[ObjectT]):
 
 
 @dataclass(frozen=True, slots=True, order=True)
+class MemberRef:
+    """Stable qualified name of any semantic object member."""
+
+    object_kind: str
+    member_name: str
+
+    def __post_init__(self) -> None:
+        if not self.object_kind or not self.member_name or "." in self.member_name:
+            raise ValueError("A member reference requires an object kind and an unqualified member name")
+
+    def __str__(self) -> str:
+        return f"{self.object_kind}.{self.member_name}"
+
+
+@dataclass(frozen=True, slots=True, order=True)
 class PropertyRef:
     """Stable qualified name of a semantic object property."""
 
@@ -265,6 +280,22 @@ class PropertyPath:
 
     def __str__(self) -> str:
         components = (self.root_kind, *self.link_members, self.property.property_name)
+        return ".".join(components)
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectionPath:
+    """An object path, optionally followed by one scalar-valued member."""
+
+    root_kind: str
+    link_members: tuple[str, ...]
+    target_kind: str
+    property: PropertyRef | None = None
+
+    def __str__(self) -> str:
+        components = (self.root_kind, *self.link_members)
+        if self.property is not None:
+            components = (*components, self.property.property_name)
         return ".".join(components)
 
 
@@ -387,6 +418,46 @@ class CallableLinkSource(Generic[ObjectT]):
     ) -> tuple[ObjectRef | PhysicalObject, ...]:
         del target_kind
         return self.resolve(obj)
+
+    @property
+    def orm_load(self) -> OrmLoadRequirement:
+        return OrmLoadRequirement()
+
+    @property
+    def queryable(self) -> bool:
+        return False
+
+    def join(self, statement: Select[Any], *, forward: bool, isouter: bool) -> None:
+        del statement, forward, isouter
+        return None
+
+    def select_sources(
+        self,
+        refs: frozenset[ObjectRef],
+        target_kind: str,
+    ) -> None:
+        del refs, target_kind
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class BatchLinkSource:
+    """Object-valued member resolved for many source objects in one SQL query."""
+
+    name: str
+    input_name: str
+    statement_for_keys: Callable[[Any], Select[Any]]
+    input_key: Callable[[ResourceRef], object]
+    target_from_row: Callable[[Any], tuple[ResourceRef, ObjectRef | PhysicalObject]]
+    batch_size: int = 500
+
+    def targets(
+        self,
+        obj: Any,
+        target_kind: str,
+    ) -> tuple[ObjectRef | PhysicalObject, ...]:
+        del obj, target_kind
+        raise RuntimeError("Batch link targets must be resolved by the projection executor")
 
     @property
     def orm_load(self) -> OrmLoadRequirement:
@@ -603,6 +674,6 @@ class ObjectKind:
 class ObjectLink:
     """A concrete object-valued member in a resource graph."""
 
-    member: PropertyRef
+    member: MemberRef
     source: ResourceRef
     target: ResourceRef

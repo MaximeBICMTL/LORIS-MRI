@@ -91,19 +91,22 @@ models:
 
 The package's `loris-data-manager inspect` command is a read-only CLI with text and JSON output.
 `--print-sql` builds the inspection plan without connecting to the database, prints its
-JOIN-based anchor query and any runtime-dependent provider query templates, and does not execute
-the plan. The same provider load steps drive SQL rendering and execution. Loading is
-projection-sensitive: selecting a scalar DICOM archive property does not load its series, file,
-or MRI-upload rows, while selecting the whole archive schedules those collection queries in
-bounded batches. ORM-backed value and link sources are also column-sensitive: they are the single
+JOIN-based anchor query and any runtime-dependent link query templates, and does not execute
+the plan. Link sources own both inline and bounded-batch target discovery, and the same link plans
+drive SQL rendering and execution. Loading is projection-sensitive: selecting a scalar or the
+whole DICOM archive does not load its on-demand series, file, or MRI-upload rows; explicitly
+selecting one of those object-valued members schedules its collection query in bounded batches.
+ORM-backed value and link sources are also column-sensitive: they are the single
 definitions for runtime value extraction and mapped-attribute hydration, so narrow projections
 load only the anchor identity and mapped attributes they actually consume. Omitted attributes use
 SQLAlchemy raiseload behavior rather than issuing implicit lazy queries. Explicit mapped
 foreign-key projection paths are planned as one joined, multi-entity statement; the same mapped
 source and target attributes define forward references, joins, reverse constraints, and source
 hydration.
-Repeatable `--select` expressions project whole logical objects or individual properties, while
-repeatable qualified `--where` filters constrain the query and are combined using AND. Object IDs
+Repeatable `--select` expressions project object paths or individual scalar members. Every prefix
+of a valid selection path is itself selectable: for example, both `dicom-archive.file` and
+`dicom-archive.file.size` are valid, and selecting a to-many member projects all of its targets.
+Repeatable qualified `--where` filters constrain the query and are combined using AND. Object IDs
 are ordinary typed, queryable semantic properties. Explicit relationship paths such as
 `--where 'dicom-archive.session.project.name=Brainstorm'` are supported. Selection may traverse
 `belongs-to` relationships in either direction when there is exactly one path. Intermediate

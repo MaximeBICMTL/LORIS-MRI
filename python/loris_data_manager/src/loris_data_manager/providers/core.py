@@ -184,7 +184,6 @@ SESSION = ObjectKind(
 class SessionProvider:
     kind = SESSION
     orm_model = DbSession
-    deferred_links = frozenset[str]()
 
     def statement(self, selection: ObjectSelection[SessionObject]):
         statement = select(DbSession)
@@ -196,9 +195,6 @@ class SessionProvider:
     def object_from_orm(self, row: DbSession) -> SessionObject:
         return SessionObject(row)
 
-    def load_steps(self, links: frozenset[str]):
-        return ()
-
     def find(self, db: Session, selection: ObjectSelection[SessionObject]) -> tuple[SessionObject, ...]:
         return tuple(self.object_from_orm(row) for row in db.scalars(self.statement(selection)))
 
@@ -206,7 +202,6 @@ class SessionProvider:
 class ProjectProvider:
     kind = PROJECT
     orm_model = DbProject
-    deferred_links = frozenset[str]()
 
     def statement(self, selection: ObjectSelection[ProjectObject]):
         statement = select(DbProject)
@@ -218,9 +213,6 @@ class ProjectProvider:
     def object_from_orm(self, row: DbProject) -> ProjectObject:
         return ProjectObject(row)
 
-    def load_steps(self, links: frozenset[str]):
-        return ()
-
     def find(self, db: Session, selection: ObjectSelection[ProjectObject]) -> tuple[ProjectObject, ...]:
         return tuple(self.object_from_orm(row) for row in db.scalars(self.statement(selection)))
 
@@ -228,7 +220,6 @@ class ProjectProvider:
 class SiteProvider:
     kind = SITE
     orm_model = DbSite
-    deferred_links = frozenset[str]()
 
     def statement(self, selection: ObjectSelection[SiteObject]):
         statement = select(DbSite)
@@ -239,9 +230,6 @@ class SiteProvider:
 
     def object_from_orm(self, row: DbSite) -> SiteObject:
         return SiteObject(row)
-
-    def load_steps(self, links: frozenset[str]):
-        return ()
 
     def find(self, db: Session, selection: ObjectSelection[SiteObject]) -> tuple[SiteObject, ...]:
         return tuple(self.object_from_orm(row) for row in db.scalars(self.statement(selection)))

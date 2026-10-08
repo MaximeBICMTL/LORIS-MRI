@@ -1,6 +1,6 @@
 """Typed provider interface and schema registry."""
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar, cast
 
@@ -11,14 +11,17 @@ from sqlalchemy.sql import Select
 from loris_data_manager.graph import GraphFragment
 from loris_data_manager.resources import ObjectRef, ResourceObject
 from loris_data_manager.schema import (
+    BatchLinkSource,
     LinkMember,
     LoadPolicy,
     LogicalObject,
+    MemberRef,
     ObjectKind,
     ObjectLink,
     ObjectSelection,
     OrmForeignKeySource,
     OrmLoadRequirement,
+    ProjectionPath,
     PropertyCriterion,
     PropertyPath,
     PropertyPredicate,
@@ -28,18 +31,6 @@ from loris_data_manager.schema import (
 )
 
 ObjectT = TypeVar("ObjectT", bound=LogicalObject)
-
-
-@dataclass(frozen=True, slots=True)
-class ProviderLoadStep:
-    """One provider-owned query populated from a preceding set of object IDs."""
-
-    name: str
-    input_name: str
-    input_kind: str
-    statement_for_keys: Callable[[Any], Select[Any]]
-    fragment_from_rows: Callable[[tuple[Any, ...]], GraphFragment]
-    batch_size: int = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,13 +54,6 @@ class ResourceProvider(Protocol[ObjectT]):
     def object_from_orm(self, row: Any) -> ObjectT:
         """Wrap one ORM result as this provider's logical object."""
         ...
-
-    @property
-    def deferred_links(self) -> frozenset[str]:
-        """Links whose objects are loaded through explicit plan steps."""
-        ...
-
-    def load_steps(self, links: frozenset[str]) -> tuple[ProviderLoadStep, ...]: ...
 
     def find(
         self,
@@ -217,11 +201,14 @@ class ResourceSchema:
                 return property_definition
         raise ValueError(f"Unknown property {property_ref}")
 
-    def property_path(self, path: str) -> PropertyPath:
-        """Resolve object-valued members followed by a scalar-valued member."""
+    def projection_path(self, path: str) -> ProjectionPath:
+        """Resolve an object path optionally followed by a scalar member."""
 
-        candidates: list[PropertyPath] = []
+        candidates: list[ProjectionPath] = []
         for root_kind in self._object_kinds:
+            if path == root_kind:
+                candidates.append(ProjectionPath(root_kind, (), root_kind))
+                continue
             prefix = f"{root_kind}."
             if not path.startswith(prefix):
                 continue
@@ -231,28 +218,66 @@ class ResourceSchema:
             current_kind = root_kind
             link_members: list[str] = []
             try:
-                for member_name in components[:-1]:
+                for index, member_name in enumerate(components):
+                    is_terminal = index == len(components) - 1
+                    if is_terminal:
+                        matching = tuple(
+                            member
+                            for member in self.members(current_kind)
+                            if member.name == member_name
+                        )
+                        if len(matching) != 1:
+                            raise ValueError
+                        terminal = matching[0]
+                        if isinstance(terminal, ValueMember):
+                            candidates.append(
+                                ProjectionPath(
+                                    root_kind,
+                                    tuple(link_members),
+                                    current_kind,
+                                    PropertyRef(current_kind, terminal.name),
+                                )
+                            )
+                        else:
+                            link_members.append(terminal.name)
+                            candidates.append(
+                                ProjectionPath(
+                                    root_kind,
+                                    tuple(link_members),
+                                    terminal.target_kind,
+                                )
+                            )
+                        break
                     link = self.link(current_kind, member_name)
                     link_members.append(member_name)
                     current_kind = link.target_kind
-                property_ref = PropertyRef(current_kind, components[-1])
-                self.property(property_ref)
             except ValueError:
                 continue
-            candidates.append(
-                PropertyPath(
-                    root_kind=root_kind,
-                    link_members=tuple(link_members),
-                    property=property_ref,
-                )
-            )
         if not candidates:
-            raise ValueError(f"Unknown property path {path!r}")
+            raise ValueError(f"Unknown projection path {path!r}")
         if len(candidates) > 1:
-            raise ValueError(f"Ambiguous property path {path!r}")
+            raise ValueError(f"Ambiguous projection path {path!r}")
         return candidates[0]
 
-    def path_links(self, path: PropertyPath) -> tuple[LinkMember[Any], ...]:
+    def property_path(self, path: str) -> PropertyPath:
+        """Resolve object-valued members followed by a scalar-valued member."""
+
+        try:
+            projection = self.projection_path(path)
+        except ValueError as error:
+            raise ValueError(f"Unknown property path {path!r}") from error
+        if projection.property is None:
+            raise ValueError(f"Property path {path!r} ends at an object")
+        return PropertyPath(
+            root_kind=projection.root_kind,
+            link_members=projection.link_members,
+            property=projection.property,
+        )
+
+    def path_links(
+        self,
+        path: PropertyPath | ProjectionPath,
+    ) -> tuple[LinkMember[Any], ...]:
         """Resolve the ordered object-valued members traversed by a property path."""
 
         current_kind = path.root_kind
@@ -261,7 +286,12 @@ class ResourceSchema:
             link = self.link(current_kind, member_name)
             links.append(link)
             current_kind = link.target_kind
-        if current_kind != path.property.object_kind:
+        target_kind = (
+            path.property.object_kind
+            if isinstance(path, PropertyPath)
+            else path.target_kind
+        )
+        if current_kind != target_kind:
             raise ValueError(f"Property path {path} ends at the wrong object kind")
         return tuple(links)
 
@@ -396,6 +426,7 @@ class ResourceModel:
             for logical_object in objects
             for link in self.schema.links(provider.kind.name)
             if link.name in link_names
+            if not isinstance(link.source, BatchLinkSource)
             for target in link.targets_for_source(logical_object)
         )
         for _, link, target in targets:
@@ -413,7 +444,7 @@ class ResourceModel:
             ),
             links=tuple(
                 ObjectLink(
-                    member=PropertyRef(link.source_kind, link.name),
+                    member=MemberRef(link.source_kind, link.name),
                     source=source,
                     target=target if isinstance(target, ObjectRef) else target.ref,
                 )

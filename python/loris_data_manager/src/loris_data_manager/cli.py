@@ -61,7 +61,7 @@ def inspect(
         typer.Option(
             "--select",
             metavar="OBJECT-OR-PROPERTY",
-            help="Select a whole logical object or one property; repeat to add projections.",
+            help="Select an object path or scalar member; repeat to add projections.",
         ),
     ],
     profile: Annotated[
