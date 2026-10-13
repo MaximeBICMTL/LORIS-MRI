@@ -17,6 +17,8 @@ from tests.util.database import get_integration_database_session
 from tests.util.file_system import assert_files_exist
 from tests.util.run_integration_script import run_integration_script
 
+BIDS_CONFIG_PATH = str(Path(__file__).with_name('bids_import_config.py'))
+
 
 def test_import_eeg_bids_dataset():
     db = get_integration_database_session()
@@ -27,7 +29,7 @@ def test_import_eeg_bids_dataset():
 
     process = run_integration_script([
         'import-bids-dataset',
-        '--create-candidate', '--create-session',
+        '--bids-config', BIDS_CONFIG_PATH,
         '--type', 'raw',
         '--directory', '/data/loris/incoming/Face13',
     ])
@@ -157,7 +159,7 @@ def test_import_mri_bids_dataset():
 
     process = run_integration_script([
         'import-bids-dataset',
-        '--create-candidate', '--create-session',
+        '--bids-config', BIDS_CONFIG_PATH,
         '--directory', '/data/loris/incoming/DCC090_587630_V2',
     ])
 

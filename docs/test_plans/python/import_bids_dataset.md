@@ -10,8 +10,14 @@
 ### General
 
 - Ensure that importing an incorrect path or non-BIDS file or directory returns an error.
-- Ensure that the `--create-session` option creates a session in LORIS.
-- Ensure that the `--create-candidate` option creates a candidate in LORIS.
+- Ensure that an import without `--bids-config` resolves existing candidates and sessions whose
+  LORIS identifiers match the BIDS labels.
+- Ensure that a `--bids-config` file can map arbitrary BIDS labels to existing LORIS candidates and
+  sessions.
+- Ensure that candidate and session creation configurations returned by a `--bids-config` file
+  create the corresponding LORIS records.
+- Ensure that `participants.tsv` and `sessions.tsv` rows are passed to the configuration functions
+  when present.
 
 ### MRI
 

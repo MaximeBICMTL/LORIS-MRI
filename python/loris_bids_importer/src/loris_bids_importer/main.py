@@ -1,19 +1,17 @@
 from typing import Any
 
-from lib.config import get_default_bids_visit_label_config
 from lib.database import Database
 from lib.db.models.session import DbSession
-from lib.db.queries.candidate import try_get_candidate_with_psc_id
-from lib.db.queries.session import try_get_session_with_cand_id_visit_label
 from lib.env import Env
 from lib.logging import log, log_error, log_error_exit, log_warning
 from loris_bids_utils.mri.reader import BidsMriDataTypeReader
 from loris_bids_utils.reader import BidsDatasetReader, BidsDataTypeReader, BidsSessionReader
 
+from loris_bids_importer.config import load_bids_config
 from loris_bids_importer.copy_files import (
     copy_bids_participants_file,
+    copy_bids_sessions_file,
     copy_bids_static_files,
-    get_loris_bids_root_file_path,
 )
 from loris_bids_importer.dataset import make_bids_importer
 from loris_bids_importer.eeg.main import Eeg
@@ -21,8 +19,7 @@ from loris_bids_importer.events import import_bids_root_event_dict_file
 from loris_bids_importer.importer import BidsImporter, BidsImporterArgs
 from loris_bids_importer.mri.main import import_bids_mri_data_type
 from loris_bids_importer.print import print_bids_import_summary, print_bids_info
-from loris_bids_importer.validation.sessions import validate_bids_sessions
-from loris_bids_importer.validation.subjects import validate_bids_subjects
+from loris_bids_importer.resolution.dataset import resolve_bids_mappings
 
 
 def import_bids_dataset(env: Env, args: BidsImporterArgs, legacy_db: Database):
@@ -36,20 +33,14 @@ def import_bids_dataset(env: Env, args: BidsImporterArgs, legacy_db: Database):
 
     print_bids_info(env, bids)
 
-    # Check the BIDS subject and session labels and create their candidates and sessions in LORIS
-    # if needed.
+    # Configure, get, or create the LORIS candidates and sessions of this BIDS dataset.
 
-    validate_bids_subjects(
-        env,
-        [subject.info for subject in bids.subjects],
-        args.create_candidate,
-    )
+    config = load_bids_config(args.bids_config_path)
+    mappings = resolve_bids_mappings(env, bids, config)
+    sessions = list(mappings.sessions.values())
 
-    sessions = validate_bids_sessions(
-        env,
-        [session.info for session in bids.sessions],
-        args.create_session,
-    )
+    if sessions == []:
+        log_error_exit(env, "No sessions found in the BIDS dataset.")
 
     # Assumption all same project (for project-wide tags)
     single_project = sessions[0].project
@@ -78,13 +69,39 @@ def import_bids_dataset(env: Env, args: BidsImporterArgs, legacy_db: Database):
     # Copy the `participants.tsv` file rows.
 
     if bids.participants_file is not None:
-        loris_participants_path = get_loris_bids_root_file_path(importer, bids.participants_file.path)
-        copy_bids_participants_file(env, importer, bids.participants_file, loris_participants_path)
+        copy_bids_participants_file(
+            env,
+            importer,
+            bids.participants_file,
+            mappings.candidates,
+        )
+
+    # Copy the `sessions.tsv` files, translating their subject and session identifiers.
+
+    for bids_subject in bids.subjects:
+        if bids_subject.sessions_file is None:
+            continue
+
+        candidate = mappings.candidates[bids_subject.label]
+        subject_sessions = {
+            bids_session.label: mappings.sessions[bids_session.subject_session_label]
+            for bids_session in bids_subject.sessions
+            if bids_session.label is not None
+        }
+
+        copy_bids_sessions_file(
+            env,
+            importer,
+            bids_subject.sessions_file,
+            candidate,
+            subject_sessions,
+        )
 
     # Process each session directory.
 
     for bids_session in bids.sessions:
-        import_bids_session(env, importer, bids_session, dataset_tag_dict, legacy_db)
+        session = mappings.sessions[bids_session.subject_session_label]
+        import_bids_session(env, importer, bids_session, session, dataset_tag_dict, legacy_db)
 
     # Print import summary.
 
@@ -95,6 +112,7 @@ def import_bids_session(
     env: Env,
     importer: BidsImporter,
     bids_session: BidsSessionReader,
+    session: DbSession,
     dataset_tag_dict: dict[Any, Any],
     legacy_db: Database,
 ):
@@ -103,26 +121,6 @@ def import_bids_session(
     """
 
     log(env, f"Importing files for subject '{bids_session.subject.label}' and session '{bids_session.label}'.")
-
-    candidate = try_get_candidate_with_psc_id(env.db, bids_session.subject.label)
-    if candidate is None:
-        # This should not happen as BIDS subject labels should have been checked previously.
-        log_error_exit(env, f"Candidate not found for PSCID '{bids_session.subject.label}'.")
-
-    if bids_session.label is not None:
-        visit_label = bids_session.label
-    else:
-        visit_label = get_default_bids_visit_label_config(env)
-        if visit_label is None:
-            log_error_exit(
-                env,
-                "Missing BIDS session in the dataset or default BIDS visit label in the LORIS configuration.",
-            )
-
-    session = try_get_session_with_cand_id_visit_label(env.db, candidate.cand_id, visit_label)
-    if session is None:
-        # This should not happen as BIDS session labels should have been checked previously.
-        log_error_exit(env, f"Visit not found for visit label '{visit_label}'.")
 
     # Process each data type directory.
 

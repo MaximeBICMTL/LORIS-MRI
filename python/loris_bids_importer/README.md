@@ -22,17 +22,75 @@ The directory passed as an argument should be a BIDS compliant dataset (see the 
 
 ## Parameters
 
-### Subject and session validation
+### Subject and session resolution
 
-To be imported into LORIS, a BIDS dataset must adhere to the following rules:
-- The subject labels of the BIDS dataset should map to LORIS candidate CandIDs or PSCIDs.
-- The session labels of the BIDS dataset should map to LORIS visit labels.
+By default, every BIDS subject label must correspond to a LORIS CandID or PSCID, and every BIDS session label must correspond to a LORIS visit label. The candidates and sessions of the BIDS dataset must already exist in LORIS when running the import.
 
-If some (or all) candidates or sessions do not exist yet in LORIS, they can be created automatically from the BIDS dataset information using the following options:
-- `--create-candidate`: Create new LORIS candidates, in which case the BIDS subject labels must correspond to new or existing LORIS PSCIDs (CandIDs will be automatically generated).
-- `--create-session`: Create new LORIS sessions, in which case the BIDS session labels must correspond to existing LORIS visit labels.
+The `--bids-config` argument can be used to provide a custom configuration file that allows to:
+- Import a sessionless BIDS dataset.
+- Use an arbitrary mapping between BIDS and LORIS subjects/candidates and sessions.
+- Create missing LORIS candidates and sessions using the BIDS metadata.
 
-Note that these options may require additional information such as the candidate and session projects, sites, and cohorts from the `participants.tsv`, `sessions.tsv`, or `scans.tsv` BIDS files.
+```sh
+import-bids-dataset --directory /path/to/bids/dataset --bids-config /path/to/bids_import_config.py
+```
+
+The Python configuration file must define two functions:
+
+```python
+from lib.db.models.candidate import DbCandidate
+from lib.env import Env
+from loris_bids_utils.files.participants import BidsParticipantTsvRow
+from loris_bids_utils.files.sessions import BidsSessionTsvRow
+
+from loris_bids_importer.config import (
+    BidsCandidateConfig,
+    BidsSessionConfig,
+    CreateBidsCandidateConfig,
+    CreateBidsSessionConfig,
+)
+
+
+def get_bids_candidate_config(
+    env: Env,
+    subject_label: str,
+    participant_row: BidsParticipantTsvRow | None,
+) -> BidsCandidateConfig:
+    return BidsCandidateConfig(
+        psc_id=f"PROJECT{int(subject_label):06}",
+        create=CreateBidsCandidateConfig(
+            registration_project="PROJECT",
+            registration_site="SITE",
+            sex=participant_row.sex if participant_row is not None else None,
+        ),
+    )
+
+
+def get_bids_session_config(
+    env: Env,
+    candidate: DbCandidate,
+    subject_label: str,
+    session_label: str | None,
+    participant_row: BidsParticipantTsvRow | None,
+    session_row: BidsSessionTsvRow | None,
+) -> BidsSessionConfig:
+    visit_labels = {
+        None: "V1",
+        "baseline": "V1",
+        "followup": "V2",
+    }
+
+    return BidsSessionConfig(
+        visit_label=visit_labels[session_label],
+        create=CreateBidsSessionConfig(
+            project="PROJECT",
+            site="SITE",
+            cohort="Control",
+        ),
+    )
+```
+
+The `project` and `site` strings may be names or aliases, the `create` argument is optional and should be provided only to create missing LORIS candidates and sessions. The configuration code may raise an exception if the provided BIDS information is incomplete or incorrect.
 
 ### File copy
 
@@ -58,7 +116,7 @@ To be visualized in the LORIS electrophysiology browser, EEG/iEEG/MEG files must
 
 The LORIS BIDS importer can import the following BIDS files:
 - Static dataset files: `dataset_description.json`, `README`.
-- Dataset structure files: `participants.tsv`, `scans.tsv`.
+- Dataset structure files: `participants.tsv`, `sessions.tsv`, `scans.tsv`.
 - MRI acquisition files: NIfTI (`.nii`, `.nii.gz`) and their JSON sidecars.
 - EEG/iEEG/MEG acquisition files: EDF (`.edf`), EEGLAB (`.set`), CTF (`.ds` directories), and their JSON sidecars.
 - EEG/iEEG/MEG metadata files: `coordsystem.json`, `electrodes.tsv`, `channels.tsv`, `events.json`, `events.tsv`.
