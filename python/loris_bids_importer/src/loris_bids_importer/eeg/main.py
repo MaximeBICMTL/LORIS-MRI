@@ -99,7 +99,7 @@ class Eeg:
                 subject=self.bids_info.subject,
                 return_type='filename',
             )[0]
-            self.scans_file = BidsScansTsvFile(Path(scans_file_path))
+            self.scans_file = BidsScansTsvFile.read(Path(scans_file_path))
 
         # register the data into LORIS
         match importer.args.type:
@@ -546,7 +546,7 @@ class Eeg:
             all_ = False,
             full_search = False,
         )
-        channels_file = BidsEegChannelsTsvFile(Path(bids_channels_file.path)) if bids_channels_file else None
+        channels_file = BidsEegChannelsTsvFile.read(Path(bids_channels_file.path)) if bids_channels_file else None
 
         if channels_file is None:
             print(f"WARNING: no channel file associated with physiological file ID {physiological_file.id}")
@@ -600,7 +600,7 @@ class Eeg:
             all_ = False,
             full_search = False,
         )
-        events_data_file = BidsEventsTsvFile(Path(bids_events_data_file.path)) if bids_events_data_file else None
+        events_data_file = BidsEventsTsvFile.read(Path(bids_events_data_file.path)) if bids_events_data_file else None
 
         if events_data_file is None:
             message = "WARNING: no events file associated with " \
