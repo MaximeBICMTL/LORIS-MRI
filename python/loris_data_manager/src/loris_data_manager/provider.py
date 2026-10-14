@@ -497,6 +497,8 @@ class ResourceModel:
         predicates: list[PropertyPredicate[Any]] = []
         constrained_refs = refs
         joins: list[tuple[LinkMember[Any], bool, bool]] = []
+        provider = self.schema.provider(kind)
+        joined_models: set[type[Any]] = {provider.orm_model}
 
         def add_join(link: LinkMember[Any], *, forward: bool, isouter: bool) -> None:
             for index, (existing, existing_forward, existing_outer) in enumerate(joins):
@@ -507,7 +509,15 @@ class ResourceModel:
                 ):
                     joins[index] = (existing, forward, existing_outer and isouter)
                     return
+            joined_kind = link.target_kind if forward else link.source_kind
+            joined_model = self.schema.provider(joined_kind).orm_model
+            if joined_model in joined_models:
+                raise ValueError(
+                    f"Joining {joined_kind!r} through {link.source_kind}.{link.name} "
+                    "revisits an ORM entity and requires SQL aliasing"
+                )
             joins.append((link, forward, isouter))
+            joined_models.add(joined_model)
 
         for criterion in criteria:
             predicate = self.schema.predicate(criterion)
@@ -521,12 +531,6 @@ class ResourceModel:
                     *self.schema.belongs_to_traversal(kind, criterion.path.root_kind),
                     *((link, True) for link in self.schema.path_links(criterion.path)),
                 )
-            directions = {forward for _, forward in path}
-            if len(directions) > 1:
-                raise ValueError(
-                    f"Property path from {kind!r} to {criterion.path} changes "
-                    "belongs-to traversal direction"
-                )
             for link, forward in path:
                 if not link.queryable:
                     raise ValueError(
@@ -539,7 +543,6 @@ class ResourceModel:
                     f"Object link {link.source_kind}.{link.name} cannot be used in SQL planning"
                 )
             add_join(link, forward=True, isouter=True)
-        provider = self.schema.provider(kind)
         statement = provider.statement(ObjectSelection(refs=constrained_refs))
         for link, forward, isouter in joins:
             statement = link.apply_join(

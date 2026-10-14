@@ -868,7 +868,24 @@ def test_inspection_selects_project_by_transitive_reverse_dicom_property(db: Ses
     assert result.selected == {ObjectRef(PROJECT.name, "3")}
 
 
-def test_automatic_relationship_path_cannot_change_direction(db: Session):
+def test_mixed_direction_property_path_scopes_candidate(db: Session):
+    add_dicom_archive(db)
+    schema = make_schema()
+    query = InspectionQuery(
+        selections=(parse_inspection_selection(schema, "candidate.cand-id"),),
+        criteria=parse_where_expressions(("session.project.alias=example",)),
+    )
+
+    plan = plan_inspection(schema, query)
+    result = inspect_resources(db, schema, query)
+    sql = format_inspection_sql(plan, mysql.dialect())
+
+    assert "JOIN session" in sql
+    assert "JOIN `Project`" in sql
+    assert result.selected == {ObjectRef(CANDIDATE.name, "11")}
+
+
+def test_property_path_requiring_repeated_entity_requires_aliasing(db: Session):
     add_dicom_archive(db)
     schema = make_schema()
     query = InspectionQuery(
@@ -878,7 +895,7 @@ def test_automatic_relationship_path_cannot_change_direction(db: Session):
         ),
     )
 
-    with pytest.raises(ValueError, match="changes belongs-to traversal direction"):
+    with pytest.raises(ValueError, match="revisits an ORM entity and requires SQL aliasing"):
         plan_inspection(schema, query)
 
 
