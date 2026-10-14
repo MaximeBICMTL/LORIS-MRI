@@ -18,7 +18,7 @@ from loris_data_manager.projection import (
     plan_projection,
 )
 from loris_data_manager.provider import ResourceModel, ResourceSchema
-from loris_data_manager.providers.core import PROJECT, SESSION, SITE
+from loris_data_manager.providers.core import CANDIDATE, PROJECT, SESSION, SITE
 from loris_data_manager.resources import (
     DatabaseRowObject,
     LocalPathObject,
@@ -249,7 +249,7 @@ def _expand_related(
     graph: ResourceGraph,
     loaded_members: set[tuple[ResourceRef, MemberRef]],
 ) -> None:
-    for kind in (SESSION, PROJECT, SITE):
+    for kind in (SESSION, CANDIDATE, PROJECT, SITE):
         keys = frozenset(int(ref.key) for ref in graph.unresolved_refs() if ref.kind == kind.name)
         if keys:
             fragment = model.select_objects(db, kind.name, refs=_refs(kind.name, keys))

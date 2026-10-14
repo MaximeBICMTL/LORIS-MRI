@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
+from lib.db.models.candidate import DbCandidate
 from lib.db.models.dicom_archive import DbDicomArchive
 from lib.db.models.dicom_archive_file import DbDicomArchiveFile
 from lib.db.models.dicom_archive_series import DbDicomArchiveSeries
@@ -12,6 +13,7 @@ from lib.db.models.mri_upload import DbMriUpload
 from lib.db.models.project import DbProject
 from lib.db.models.session import DbSession
 from lib.db.models.site import DbSite
+from lib.db.models.visit import DbVisit
 from sqlalchemy import event, select
 from sqlalchemy.dialects import mysql
 from sqlalchemy.exc import InvalidRequestError
@@ -36,7 +38,7 @@ from loris_data_manager import (
     ObjectRef,
     ObjectSelection,
     OrmColumnSource,
-    OrmForeignKeySource,
+    OrmMappedLinkSource,
     PropertyRef,
     RelationshipSemantics,
     ResourceGraph,
@@ -56,9 +58,11 @@ from loris_data_manager.inspection import (
     plan_inspection,
 )
 from loris_data_manager.providers.core import (
+    CANDIDATE,
     PROJECT,
     SESSION,
     SITE,
+    VISIT,
     SessionProvider,
     register_core_schema,
 )
@@ -92,6 +96,15 @@ def inspection_selection(expression: str):
 def add_dicom_archive(db: Session) -> DbDicomArchive:
     project = DbProject(id=3, name="Example Project", alias="example")
     site = DbSite(id=1, name="Example Site", alias="EX")
+    candidate = DbCandidate(
+        id=11,
+        cand_id=123456,
+        psc_id="EX123456",
+        registration_site_id=1,
+        registration_project_id=3,
+        active=True,
+    )
+    visit = DbVisit(id=5, name="Baseline", label="V1")
     session = DbSession(
         id=7,
         candidate_id=11,
@@ -120,7 +133,7 @@ def add_dicom_archive(db: Session) -> DbDicomArchive:
         session_id=7,
         acquisition_metadata="",
     )
-    db.add_all((project, site, session, archive))
+    db.add_all((project, site, candidate, visit, session, archive))
     db.flush()
     db.add(
         DbMriUpload(
@@ -263,11 +276,15 @@ def test_composes_independently_resolved_provider_fragments(db: Session):
             ObjectSelection(refs=frozenset({ObjectRef(SESSION.name, "7")})),
         )
     )
-    assert graph.unresolved_refs() == {ObjectRef(PROJECT.name, "3"), ObjectRef(SITE.name, "1")}
+    assert graph.unresolved_refs() == {
+        ObjectRef(CANDIDATE.name, "11"),
+        ObjectRef(PROJECT.name, "3"),
+        ObjectRef(SITE.name, "1"),
+    }
     assert len(graph.logical_objects) == 2
     assert len(graph.physical_objects) == 3
     assert len(graph.objects) == 5
-    assert len(graph.links) == 6
+    assert len(graph.links) == 7
 
 
 def test_schema_can_be_extended_without_modifying_core_types():
@@ -296,6 +313,8 @@ def test_schema_can_be_extended_without_modifying_core_types():
         "session",
         "project",
         "site",
+        "candidate",
+        "visit",
         "dicom-archive",
         "database-row",
         "local-path",
@@ -324,10 +343,11 @@ def test_relationships_are_named_schema_members_not_properties():
 
     assert {property_definition.name for property_definition in schema.properties(SESSION.name)} == {
         "id",
-        "participant-id",
         "visit-label",
         "active",
     }
+    assert schema.link(SESSION.name, "candidate").target_kind == CANDIDATE.name
+    assert schema.link(SESSION.name, "visit").target_kind == VISIT.name
     assert schema.link(SESSION.name, "project").target_kind == PROJECT.name
     assert schema.link(SESSION.name, "site").target_kind == SITE.name
     assert schema.link(DICOM_ARCHIVE.name, "session").target_kind == SESSION.name
@@ -710,7 +730,7 @@ def test_schema_rejects_mapped_relationship_attributes_from_the_wrong_model():
                 name="invalid-project",
                 source_kind=DICOM_ARCHIVE.name,
                 target_kind=PROJECT.name,
-                source=OrmForeignKeySource(DbSession.project_id, DbProject.id),
+                source=OrmMappedLinkSource(DbSession.project_id, DbProject.id),
                 traversal_semantics=RelationshipSemantics.BELONGS_TO,
             ),
         )
@@ -729,7 +749,7 @@ def test_schema_rolls_back_a_provider_when_mapped_link_validation_fails():
                 name="project",
                 source_kind="invalid",
                 target_kind=PROJECT.name,
-                source=OrmForeignKeySource(DbSession.project_id, DbProject.id),
+                source=OrmMappedLinkSource(DbSession.project_id, DbProject.id),
             ),
         ),
     )
@@ -902,7 +922,108 @@ def test_project_and_site_properties_scope_sessions_without_leaking_scope_object
 
     assert result.selected == {ObjectRef(SESSION.name, "7")}
     assert {obj.ref for obj in result.graph.logical_objects} == {ObjectRef(SESSION.name, "7")}
-    assert result.graph.unresolved_refs() == {ObjectRef(PROJECT.name, "3"), ObjectRef(SITE.name, "1")}
+    assert result.graph.unresolved_refs() == {
+        ObjectRef(CANDIDATE.name, "11"),
+        ObjectRef(PROJECT.name, "3"),
+        ObjectRef(SITE.name, "1"),
+    }
+
+
+def test_candidate_and_visit_are_independently_selectable_by_database_identity(db: Session):
+    add_dicom_archive(db)
+
+    candidate_result = inspect_resources(
+        db,
+        make_schema(),
+        InspectionQuery(
+            selections=(inspection_selection("candidate"),),
+            criteria=parse_where_expressions(("candidate.id=11",)),
+        ),
+    )
+    visit_result = inspect_resources(
+        db,
+        make_schema(),
+        InspectionQuery(
+            selections=(inspection_selection("visit"),),
+            criteria=parse_where_expressions(("visit.id=5",)),
+        ),
+    )
+
+    assert candidate_result.selected == {ObjectRef(CANDIDATE.name, "11")}
+    assert visit_result.selected == {ObjectRef(VISIT.name, "5")}
+
+
+def test_session_projects_candidate_and_visit_relationships(db: Session):
+    add_dicom_archive(db)
+
+    result = inspect_resources(
+        db,
+        make_schema(),
+        InspectionQuery(
+            selections=(
+                inspection_selection("session.candidate.cand-id"),
+                inspection_selection("session.visit.name"),
+            ),
+            criteria=parse_where_expressions(("session.id=7",)),
+        ),
+    )
+
+    assert result.selected == {ObjectRef(CANDIDATE.name, "11"), ObjectRef(VISIT.name, "5")}
+    assert result.graph.get(ObjectRef(CANDIDATE.name, "11")) is not None
+    assert result.graph.get(ObjectRef(VISIT.name, "5")) is not None
+
+
+def test_candidate_and_visit_properties_scope_sessions(db: Session):
+    add_dicom_archive(db)
+
+    result = inspect_resources(
+        db,
+        make_schema(),
+        InspectionQuery(
+            selections=(inspection_selection("session"),),
+            criteria=parse_where_expressions(
+                ("session.candidate.id=11", "session.visit.label=V1")
+            ),
+        ),
+    )
+
+    assert result.selected == {ObjectRef(SESSION.name, "7")}
+
+
+def test_session_visit_projection_preserves_every_matching_visit_without_cardinality_policy(
+    db: Session,
+):
+    add_dicom_archive(db)
+    db.add(DbVisit(id=6, name="Alternate baseline", label="V1"))
+    db.flush()
+
+    result = inspect_resources(
+        db,
+        make_schema(),
+        InspectionQuery(
+            selections=(inspection_selection("session.visit"),),
+            criteria=parse_where_expressions(("session.id=7",)),
+        ),
+    )
+
+    assert result.selected == {ObjectRef(VISIT.name, "5"), ObjectRef(VISIT.name, "6")}
+
+
+def test_reference_traversal_uses_mapped_match_and_identity_attributes(db: Session):
+    add_dicom_archive(db)
+    schema = make_schema()
+    model = ResourceModel(schema)
+    link = schema.link(SESSION.name, "visit")
+
+    visits = model.traverse_refs(
+        db,
+        frozenset({ObjectRef(SESSION.name, "7")}),
+        ((link, True),),
+    )
+    sessions = model.traverse_refs(db, visits, ((link, False),))
+
+    assert visits == {ObjectRef(VISIT.name, "5")}
+    assert sessions == {ObjectRef(SESSION.name, "7")}
 
 
 def test_model_transitively_selects_dicom_by_belongs_to_properties(db: Session):
@@ -916,6 +1037,8 @@ def test_model_transitively_selects_dicom_by_belongs_to_properties(db: Session):
         criteria=(
             schema.criterion("project.name", "Example Project"),
             schema.criterion("site.alias", "EX"),
+            schema.criterion("candidate.cand-id", 123456),
+            schema.criterion("visit.id", 5),
             schema.criterion("session.visit-label", "V1"),
         ),
     )
@@ -1247,7 +1370,6 @@ def test_inspection_selects_intermediate_logical_object_with_default_members(db:
     document = json.loads(format_inspection_json(result))
     assert document["objects"][0]["properties"] == {
         "id": 7,
-        "participant-id": 11,
         "visit-label": "V1",
         "active": True,
     }
@@ -1314,7 +1436,7 @@ def test_property_selection_rejects_ambiguous_belongs_to_paths(db: Session):
             name="project",
             source_kind=DICOM_ARCHIVE.name,
             target_kind=PROJECT.name,
-            source=OrmForeignKeySource(DbDicomArchive.session_id, DbProject.id),
+            source=OrmMappedLinkSource(DbDicomArchive.session_id, DbProject.id),
             traversal_semantics=RelationshipSemantics.BELONGS_TO,
         ),
     )

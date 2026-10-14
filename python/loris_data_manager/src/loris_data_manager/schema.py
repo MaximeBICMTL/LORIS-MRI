@@ -481,13 +481,24 @@ class BatchLinkSource:
 
 
 @dataclass(frozen=True, slots=True)
-class OrmForeignKeySource:
-    """Logical-object reference derived from one mapped foreign-key attribute."""
+class OrmMappedLinkSource:
+    """ORM link defined by join attributes and the target's stable identity."""
 
     source_attribute: InstrumentedAttribute[Any]
-    target_attribute: InstrumentedAttribute[Any]
+    target_match_attribute: InstrumentedAttribute[Any]
+    target_identity_attribute: InstrumentedAttribute[Any] | None = None
+
+    @property
+    def target_identity(self) -> InstrumentedAttribute[Any]:
+        if self.target_identity_attribute is not None:
+            return self.target_identity_attribute
+        return self.target_match_attribute
 
     def targets(self, obj: Any, target_kind: str) -> tuple[ObjectRef, ...]:
+        if self.target_identity is not self.target_match_attribute:
+            raise RuntimeError(
+                "Mapped link targets with a distinct identity must be resolved from joined rows"
+            )
         value = getattr(getattr(obj, "orm"), self.source_attribute.key)
         return () if value is None else (ObjectRef(target_kind, str(value)),)
 
@@ -507,11 +518,11 @@ class OrmForeignKeySource:
         isouter: bool,
     ) -> Select[Any]:
         joined_model = (
-            self.target_attribute.class_ if forward else self.source_attribute.class_
+            self.target_match_attribute.class_ if forward else self.source_attribute.class_
         )
         return statement.join(
             joined_model,
-            self.source_attribute == self.target_attribute,
+            self.source_attribute == self.target_match_attribute,
             isouter=isouter,
         )
 
@@ -525,7 +536,8 @@ class OrmForeignKeySource:
             raise ValueError(
                 f"Expected {target_kind!r} references, got kinds {sorted(wrong_kinds)}"
             )
-        column = self.target_attribute.property.columns[0]
+        identity_attribute = self.target_identity
+        column = identity_attribute.property.columns[0]
         python_type = column.type.python_type
         try:
             values = tuple(python_type(ref.key) for ref in refs)
@@ -533,13 +545,18 @@ class OrmForeignKeySource:
             raise ValueError(
                 f"References to {target_kind!r} are invalid for {column}"
             ) from error
-        return ObjectSelection(
-            constraints=(
-                SelectionConstraint(
-                    lambda statement: statement.where(self.source_attribute.in_(values))
-                ),
+        if identity_attribute is self.target_match_attribute:
+            constraint: SelectionConstraint[Any] = SelectionConstraint(
+                lambda statement: statement.where(self.source_attribute.in_(values))
             )
-        )
+        else:
+            constraint = SelectionConstraint(
+                lambda statement: statement.join(
+                    self.target_match_attribute.class_,
+                    self.source_attribute == self.target_match_attribute,
+                ).where(identity_attribute.in_(values))
+            )
+        return ObjectSelection(constraints=(constraint,))
 
 
 @dataclass(frozen=True, slots=True)

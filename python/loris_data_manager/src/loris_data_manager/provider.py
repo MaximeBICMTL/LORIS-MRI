@@ -19,8 +19,8 @@ from loris_data_manager.schema import (
     ObjectKind,
     ObjectLink,
     ObjectSelection,
-    OrmForeignKeySource,
     OrmLoadRequirement,
+    OrmMappedLinkSource,
     ProjectionPath,
     PropertyCriterion,
     PropertyPath,
@@ -140,7 +140,7 @@ class ResourceSchema:
     def _validate_mapped_links(self) -> None:
         for source_kind, source_provider in self._providers.items():
             for link in self.links(source_kind):
-                if not isinstance(link.source, OrmForeignKeySource):
+                if not isinstance(link.source, OrmMappedLinkSource):
                     continue
                 if link.source.source_attribute.class_ is not source_provider.orm_model:
                     raise ValueError(
@@ -150,11 +150,19 @@ class ResourceSchema:
                 target_provider = self._providers.get(link.target_kind)
                 if (
                     target_provider is not None
-                    and link.source.target_attribute.class_ is not target_provider.orm_model
+                    and link.source.target_match_attribute.class_ is not target_provider.orm_model
                 ):
                     raise ValueError(
                         f"Mapped relationship {source_kind}.{link.name} uses a target attribute "
-                        f"from {link.source.target_attribute.class_.__name__!r}"
+                        f"from {link.source.target_match_attribute.class_.__name__!r}"
+                    )
+                if (
+                    target_provider is not None
+                    and link.source.target_identity.class_ is not target_provider.orm_model
+                ):
+                    raise ValueError(
+                        f"Mapped relationship {source_kind}.{link.name} uses a target identity "
+                        f"from {link.source.target_identity.class_.__name__!r}"
                     )
 
     def provider(self, kind: str) -> ResourceProvider[Any]:
@@ -579,16 +587,18 @@ class ResourceModel:
         current_refs = refs
         for link, forward in steps:
             if forward:
-                fragment = self.resolve(
-                    db,
-                    self.schema.provider(link.source_kind),
-                    ObjectSelection(refs=current_refs),
-                )
+                if not link.queryable:
+                    raise ValueError(
+                        f"Object link {link.source_kind}.{link.name} cannot be traversed in SQL"
+                    )
+                source_provider = self.schema.provider(link.source_kind)
+                target_provider = self.schema.provider(link.target_kind)
+                statement = source_provider.statement(ObjectSelection(refs=current_refs))
+                statement = link.apply_join(statement, forward=True, isouter=False)
+                statement = statement.add_columns(target_provider.orm_model)
                 current_refs = frozenset(
-                    target
-                    for logical_object in fragment.logical_objects
-                    for target in link.targets_for_source(logical_object)
-                    if isinstance(target, ObjectRef)
+                    target_provider.object_from_orm(row[1]).ref
+                    for row in db.execute(statement).unique()
                 )
             else:
                 fragment = self.resolve(

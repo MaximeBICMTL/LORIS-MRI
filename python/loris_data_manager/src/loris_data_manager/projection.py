@@ -200,7 +200,42 @@ def execute_projection(db: Session, plan: ProjectionPlan) -> ProjectionResult:
             plan.anchor_kind,
             planned.source_path,
         )
-        _load_link(db, schema, model, graph, planned, source_objects, loaded_members)
+        joined_targets: list[tuple[ResourceRef, ObjectRef | PhysicalObject]] | None = None
+        target_path = (*planned.source_path, planned.link.name)
+        if target_path in fragments:
+            source_index = next(
+                index for index, entity in enumerate(plan.entities) if entity.path == planned.source_path
+            )
+            target_index = next(
+                index for index, entity in enumerate(plan.entities) if entity.path == target_path
+            )
+            source_provider = schema.provider(planned.link.source_kind)
+            target_provider = schema.provider(planned.link.target_kind)
+            joined_targets = []
+            targets_by_source: dict[ResourceRef, set[ObjectRef]] = {}
+            for row in rows:
+                source_orm = row[source_index]
+                target_orm = row[target_index]
+                if source_orm is None or target_orm is None:
+                    continue
+                source_ref = source_provider.object_from_orm(source_orm).ref
+                target_ref = target_provider.object_from_orm(target_orm).ref
+                targets_by_source.setdefault(source_ref, set()).add(target_ref)
+            joined_targets.extend(
+                (source_ref, target_ref)
+                for source_ref, targets in targets_by_source.items()
+                for target_ref in targets
+            )
+        _load_link(
+            db,
+            schema,
+            model,
+            graph,
+            planned,
+            source_objects,
+            loaded_members,
+            resolved_targets=joined_targets,
+        )
 
     projected: list[frozenset[ResourceRef]] = []
     for path in plan.paths:
@@ -268,6 +303,8 @@ def _load_link(
     planned: ProjectionLinkPlan,
     source_objects: tuple[ResourceObject, ...],
     loaded_members: set[tuple[ResourceRef, MemberRef]],
+    *,
+    resolved_targets: list[tuple[ResourceRef, ObjectRef | PhysicalObject]] | None = None,
 ) -> None:
     link = planned.link
     source_refs = frozenset(obj.ref for obj in source_objects)
@@ -275,7 +312,9 @@ def _load_link(
     if not source_refs:
         return
 
-    if isinstance(link.source, BatchLinkSource):
+    if resolved_targets is not None:
+        resolved = resolved_targets
+    elif isinstance(link.source, BatchLinkSource):
         source = link.source
         keys = tuple(source.input_key(ref) for ref in sorted(source_refs, key=str))
         resolved: list[tuple[ResourceRef, ObjectRef | PhysicalObject]] = []
