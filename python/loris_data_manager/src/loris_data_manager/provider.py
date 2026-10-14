@@ -27,6 +27,8 @@ from loris_data_manager.schema import (
     PropertyPredicate,
     PropertyRef,
     RelationshipSemantics,
+    StorageRoot,
+    UnmodeledDatabaseReference,
     ValueMember,
 )
 
@@ -70,6 +72,8 @@ class ResourceSchema:
     def __init__(self) -> None:
         self._object_kinds: dict[str, ObjectKind] = {}
         self._providers: dict[str, ResourceProvider[Any]] = {}
+        self._storage_roots: dict[str, StorageRoot] = {}
+        self._unmodeled_database_references: list[UnmodeledDatabaseReference] = []
 
     @property
     def object_kinds(self) -> tuple[ObjectKind, ...]:
@@ -115,6 +119,32 @@ class ResourceSchema:
         except Exception:
             del self._providers[kind_name]
             raise
+
+    @property
+    def storage_roots(self) -> tuple[StorageRoot, ...]:
+        return tuple(self._storage_roots.values())
+
+    def register_storage_root(self, root: StorageRoot) -> None:
+        if root.name in self._storage_roots:
+            raise ValueError(f"Storage root {root.name!r} is already registered")
+        self._storage_roots[root.name] = root
+
+    def storage_root(self, name: str) -> StorageRoot:
+        try:
+            return self._storage_roots[name]
+        except KeyError as error:
+            raise ValueError(f"Unknown storage root {name!r}") from error
+
+    @property
+    def unmodeled_database_references(self) -> tuple[UnmodeledDatabaseReference, ...]:
+        return tuple(self._unmodeled_database_references)
+
+    def register_unmodeled_database_reference(
+        self,
+        reference: UnmodeledDatabaseReference,
+    ) -> None:
+        self.object_kind(reference.source_kind)
+        self._unmodeled_database_references.append(reference)
 
     def register_member(self, kind: str, member: ValueMember[Any, Any, Any] | LinkMember[Any]) -> None:
         definition = self.object_kind(kind)

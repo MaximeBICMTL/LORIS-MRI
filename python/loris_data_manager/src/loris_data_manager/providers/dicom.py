@@ -1,12 +1,14 @@
 """Proof-of-concept DICOM archive projection."""
 
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
 
 from lib.db.models.dicom_archive import DbDicomArchive
 from lib.db.models.dicom_archive_file import DbDicomArchiveFile
 from lib.db.models.dicom_archive_series import DbDicomArchiveSeries
+from lib.db.models.file import DbFile
+from lib.db.models.mri_protocol_violated_scan import DbMriProtocolViolatedScan
 from lib.db.models.mri_upload import DbMriUpload
+from lib.db.models.mri_violation_log import DbMriViolationLog
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -15,7 +17,7 @@ from loris_data_manager.providers.core import (
     DATABASE_ROW_KIND,
     session_link,
 )
-from loris_data_manager.resources import DatabaseRowObject, LocalPathObject, LocalPathType, ObjectRef
+from loris_data_manager.resources import LocalPathObject, LocalPathType, ObjectRef
 from loris_data_manager.schema import (
     INTEGER_TYPE,
     STRING_TYPE,
@@ -24,12 +26,14 @@ from loris_data_manager.schema import (
     LifecycleSemantics,
     LinkMember,
     LoadPolicy,
+    LocalPathColumnSource,
     ObjectKind,
     ObjectSelection,
-    OrmColumnLinkSource,
     OrmColumnSource,
     OrmEntitySource,
     PropertyQuery,
+    StorageRoot,
+    UnmodeledDatabaseReference,
     ValueMember,
 )
 
@@ -119,17 +123,12 @@ DICOM_ARCHIVE_SERIES_ROWS = LinkMember[DicomArchiveObject](
     name="series-row",
     source_kind=DICOM_ARCHIVE_KIND,
     target_kind=DATABASE_ROW_KIND,
-    source=BatchLinkSource(
+    source=BatchLinkSource.database_rows(
+        source_kind=DICOM_ARCHIVE_KIND,
+        source_attribute=DbDicomArchive.id,
+        target_attribute=DbDicomArchiveSeries.archive_id,
         name="load DICOM series rows",
         input_name="dicom_archive_ids",
-        statement_for_keys=lambda keys: select(DbDicomArchiveSeries).where(
-            DbDicomArchiveSeries.archive_id.in_(keys)
-        ),
-        input_key=lambda ref: int(ref.key) if isinstance(ref, ObjectRef) else ref,
-        target_from_row=lambda row: (
-            ObjectRef(DICOM_ARCHIVE_KIND, str(row.archive_id)),
-            DatabaseRowObject(row),
-        ),
     ),
     lifecycle=LifecycleSemantics.OWNS,
     load_policy=LoadPolicy.ON_DEMAND,
@@ -138,17 +137,12 @@ DICOM_ARCHIVE_FILE_ROWS = LinkMember[DicomArchiveObject](
     name="file-row",
     source_kind=DICOM_ARCHIVE_KIND,
     target_kind=DATABASE_ROW_KIND,
-    source=BatchLinkSource(
+    source=BatchLinkSource.database_rows(
+        source_kind=DICOM_ARCHIVE_KIND,
+        source_attribute=DbDicomArchive.id,
+        target_attribute=DbDicomArchiveFile.archive_id,
         name="load DICOM file rows",
         input_name="dicom_archive_ids",
-        statement_for_keys=lambda keys: select(DbDicomArchiveFile).where(
-            DbDicomArchiveFile.archive_id.in_(keys)
-        ),
-        input_key=lambda ref: int(ref.key) if isinstance(ref, ObjectRef) else ref,
-        target_from_row=lambda row: (
-            ObjectRef(DICOM_ARCHIVE_KIND, str(row.archive_id)),
-            DatabaseRowObject(row),
-        ),
     ),
     lifecycle=LifecycleSemantics.OWNS,
     load_policy=LoadPolicy.ON_DEMAND,
@@ -157,17 +151,12 @@ DICOM_ARCHIVE_UPLOAD_ROWS = LinkMember[DicomArchiveObject](
     name="upload-row",
     source_kind=DICOM_ARCHIVE_KIND,
     target_kind=DATABASE_ROW_KIND,
-    source=BatchLinkSource(
+    source=BatchLinkSource.database_rows(
+        source_kind=DICOM_ARCHIVE_KIND,
+        source_attribute=DbDicomArchive.id,
+        target_attribute=DbMriUpload.dicom_archive_id,
         name="load MRI upload rows",
         input_name="dicom_archive_ids",
-        statement_for_keys=lambda keys: select(DbMriUpload).where(
-            DbMriUpload.dicom_archive_id.in_(keys)
-        ),
-        input_key=lambda ref: int(ref.key) if isinstance(ref, ObjectRef) else ref,
-        target_from_row=lambda row: (
-            ObjectRef(DICOM_ARCHIVE_KIND, str(row.dicom_archive_id)),
-            DatabaseRowObject(row),
-        ),
     ),
     lifecycle=LifecycleSemantics.REFERENCES,
     load_policy=LoadPolicy.ON_DEMAND,
@@ -176,15 +165,10 @@ DICOM_ARCHIVE_FILE = LinkMember[DicomArchiveObject](
     name="file",
     source_kind=DICOM_ARCHIVE_KIND,
     target_kind=LOCAL_PATH_KIND,
-    source=OrmColumnLinkSource[Path | None](
-        DbDicomArchive.path,
-        lambda path: (
-            LocalPathObject(
-                storage_root="dicom-archive",
-                relative_path=PurePosixPath(path.as_posix()),
-                expected_type=LocalPathType.FILE,
-            ),
-        ) if path is not None else (),
+    source=LocalPathColumnSource(
+        attribute=DbDicomArchive.path,
+        storage_root="dicom-archive",
+        expected_type=LocalPathType.FILE,
     ),
     lifecycle=LifecycleSemantics.OWNS,
 )
@@ -240,6 +224,19 @@ def _integer_keys(keys: frozenset[str], kind: str) -> frozenset[int]:
 
 
 def register_dicom_schema(schema: ResourceSchema) -> None:
+    schema.register_storage_root(StorageRoot("dicom-archive", "tarchiveLibraryDir"))
     schema.register_object_kind(LOCAL_PATH)
     schema.register_object_kind(DICOM_ARCHIVE)
     schema.register_provider(DicomArchiveProvider())
+    for reference_attribute in (
+        DbFile.dicom_archive_id,
+        DbMriProtocolViolatedScan.dicom_archive_id,
+        DbMriViolationLog.dicom_archive_id,
+    ):
+        schema.register_unmodeled_database_reference(
+            UnmodeledDatabaseReference(
+                source_kind=DICOM_ARCHIVE_KIND,
+                source_attribute=DbDicomArchive.id,
+                reference_attribute=reference_attribute,
+            )
+        )

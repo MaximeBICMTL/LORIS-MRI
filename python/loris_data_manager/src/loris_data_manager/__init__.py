@@ -34,6 +34,7 @@ from loris_data_manager.schema import (
     LifecycleSemantics,
     LinkMember,
     LoadPolicy,
+    LocalPathColumnSource,
     LogicalObject,
     MemberRef,
     ObjectKind,
@@ -54,6 +55,8 @@ from loris_data_manager.schema import (
     PropertyType,
     RelationshipSemantics,
     SelectionConstraint,
+    StorageRoot,
+    UnmodeledDatabaseReference,
     ValueMember,
 )
 
@@ -72,6 +75,7 @@ __all__ = [
     "LifecycleSemantics",
     "LinkMember",
     "LoadPolicy",
+    "LocalPathColumnSource",
     "LocalPathObject",
     "LocalPathRef",
     "LocalPathType",
@@ -108,6 +112,8 @@ __all__ = [
     "ResourceRef",
     "ResourceSchema",
     "SelectionConstraint",
+    "StorageRoot",
+    "UnmodeledDatabaseReference",
     "ValueMember",
     "execute_projection",
     "plan_projection",

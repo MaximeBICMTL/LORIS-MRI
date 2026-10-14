@@ -7,8 +7,10 @@ objects projected from those models and the relationships between those objects.
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import PurePosixPath
 from typing import Any, Generic, Protocol, TypeAlias, TypeVar, cast
 
+from sqlalchemy import select
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 from sqlalchemy.sql import Select
 from sqlalchemy.sql.elements import ColumnElement
@@ -16,6 +18,7 @@ from sqlalchemy.sql.elements import ColumnElement
 from loris_data_manager.resources import (
     DatabaseRowObject,
     LocalPathObject,
+    LocalPathType,
     ObjectRef,
     PhysicalObject,
     ResourceObject,
@@ -362,6 +365,23 @@ class LifecycleSemantics(StrEnum):
     REFERENCES = "references"
 
 
+@dataclass(frozen=True, slots=True)
+class StorageRoot:
+    """Deployment binding for a named local-path namespace."""
+
+    name: str
+    config_setting: str
+
+
+@dataclass(frozen=True, slots=True)
+class UnmodeledDatabaseReference:
+    """Temporary physical reference not yet represented by an object link."""
+
+    source_kind: str
+    source_attribute: InstrumentedAttribute[Any]
+    reference_attribute: InstrumentedAttribute[Any]
+
+
 class RelationshipSemantics(StrEnum):
     """Broad lifecycle meaning of a relationship.
 
@@ -450,6 +470,42 @@ class BatchLinkSource:
     input_key: Callable[[ResourceRef], object]
     target_from_row: Callable[[Any], tuple[ResourceRef, ObjectRef | PhysicalObject]]
     batch_size: int = 500
+    set_source_attribute: InstrumentedAttribute[Any] | None = None
+    set_target_attribute: InstrumentedAttribute[Any] | None = None
+
+    @classmethod
+    def database_rows(
+        cls,
+        *,
+        source_kind: str,
+        source_attribute: InstrumentedAttribute[Any],
+        target_attribute: InstrumentedAttribute[Any],
+        name: str | None = None,
+        input_name: str | None = None,
+        batch_size: int = 500,
+    ) -> "BatchLinkSource":
+        """Define a row collection once for runtime and set-oriented consumers."""
+
+        source_column = source_attribute.property.columns[0]
+        source_python_type = source_column.type.python_type
+        target_model = target_attribute.class_
+        return cls(
+            name=name or f"load {target_model.__name__} rows",
+            input_name=input_name or f"{source_kind.replace('-', '_')}_keys",
+            statement_for_keys=lambda keys: select(target_model).where(
+                target_attribute.in_(keys)
+            ),
+            input_key=lambda ref: source_python_type(ref.key)
+            if isinstance(ref, ObjectRef)
+            else ref,
+            target_from_row=lambda row: (
+                ObjectRef(source_kind, str(getattr(row, target_attribute.key))),
+                DatabaseRowObject(row),
+            ),
+            batch_size=batch_size,
+            set_source_attribute=source_attribute,
+            set_target_attribute=target_attribute,
+        )
 
     def targets(
         self,
@@ -574,6 +630,48 @@ class OrmColumnLinkSource(Generic[ValueT]):
         del target_kind
         value = cast(ValueT, getattr(getattr(obj, "orm"), self.attribute.key))
         return self.resolve_value(value)
+
+    @property
+    def orm_load(self) -> OrmLoadRequirement:
+        return OrmLoadRequirement(attributes=(self.attribute,))
+
+    @property
+    def queryable(self) -> bool:
+        return False
+
+    def join(self, statement: Select[Any], *, forward: bool, isouter: bool) -> None:
+        del statement, forward, isouter
+        return None
+
+    def select_sources(
+        self,
+        refs: frozenset[ObjectRef],
+        target_kind: str,
+    ) -> None:
+        del refs, target_kind
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class LocalPathColumnSource:
+    """Local path derived from a mapped column and a named storage root."""
+
+    attribute: InstrumentedAttribute[Any]
+    storage_root: str
+    expected_type: LocalPathType
+
+    def targets(self, obj: Any, target_kind: str) -> tuple[LocalPathObject, ...]:
+        del target_kind
+        value = getattr(getattr(obj, "orm"), self.attribute.key)
+        if value is None:
+            return ()
+        return (
+            LocalPathObject(
+                storage_root=self.storage_root,
+                relative_path=PurePosixPath(value.as_posix()),
+                expected_type=self.expected_type,
+            ),
+        )
 
     @property
     def orm_load(self) -> OrmLoadRequirement:
