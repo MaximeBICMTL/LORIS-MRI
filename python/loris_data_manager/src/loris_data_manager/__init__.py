@@ -1,6 +1,14 @@
 """Experimental logical resource model layered above the LORIS ORM."""
 
 from loris_data_manager.graph import GraphFragment, ResourceGraph
+from loris_data_manager.projection import (
+    ProjectionEntityPlan,
+    ProjectionLinkPlan,
+    ProjectionPlan,
+    ProjectionResult,
+    execute_projection,
+    plan_projection,
+)
 from loris_data_manager.provider import ResourceModel, ResourceProvider, ResourceSchema
 from loris_data_manager.resources import (
     DatabaseRowObject,
@@ -80,7 +88,11 @@ __all__ = [
     "OrmLoadRequirement",
     "PhysicalObject",
     "PhysicalObjectRef",
+    "ProjectionEntityPlan",
+    "ProjectionLinkPlan",
     "ProjectionPath",
+    "ProjectionPlan",
+    "ProjectionResult",
     "PropertyCriterion",
     "PropertyPath",
     "PropertyPredicate",
@@ -97,4 +109,6 @@ __all__ = [
     "ResourceSchema",
     "SelectionConstraint",
     "ValueMember",
+    "execute_projection",
+    "plan_projection",
 ]

@@ -715,6 +715,44 @@ def test_schema_rejects_mapped_relationship_attributes_from_the_wrong_model():
             ),
         )
 
+    assert all(member.name != "invalid-project" for member in schema.members(DICOM_ARCHIVE.name))
+
+
+def test_schema_rolls_back_a_provider_when_mapped_link_validation_fails():
+    schema = ResourceSchema()
+    register_core_schema(schema)
+    invalid_kind = ObjectKind(
+        "invalid",
+        DicomArchiveObject,
+        (
+            LinkMember(
+                name="project",
+                source_kind="invalid",
+                target_kind=PROJECT.name,
+                source=OrmForeignKeySource(DbSession.project_id, DbProject.id),
+            ),
+        ),
+    )
+    schema.register_object_kind(invalid_kind)
+
+    class InvalidProvider:
+        kind = invalid_kind
+        orm_model = DbProject
+
+        def statement(self, selection: ObjectSelection[Any]) -> Any:
+            raise NotImplementedError
+
+        def object_from_orm(self, row: Any) -> Any:
+            raise NotImplementedError
+
+        def find(self, db: Session, selection: ObjectSelection[Any]) -> tuple[Any, ...]:
+            raise NotImplementedError
+
+    with pytest.raises(ValueError, match="uses a source attribute"):
+        schema.register_provider(InvalidProvider())
+
+    assert not schema.has_provider(invalid_kind.name)
+
 
 def test_local_paths_cannot_escape_their_storage_root():
     with pytest.raises(ValueError, match="within its storage root"):

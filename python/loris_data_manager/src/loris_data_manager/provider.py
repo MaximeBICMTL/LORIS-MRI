@@ -110,7 +110,11 @@ class ResourceSchema:
         if kind_name in self._providers:
             raise ValueError(f"Provider for {kind_name!r} is already registered")
         self._providers[kind_name] = provider
-        self._validate_mapped_links()
+        try:
+            self._validate_mapped_links()
+        except Exception:
+            del self._providers[kind_name]
+            raise
 
     def register_member(self, kind: str, member: ValueMember[Any, Any, Any] | LinkMember[Any]) -> None:
         definition = self.object_kind(kind)
@@ -121,12 +125,17 @@ class ResourceSchema:
                 raise ValueError(f"Link member {member.name!r} has the wrong source kind")
             if member.target_kind not in self._object_kinds:
                 raise ValueError(f"Link member {member.name!r} uses an unknown target kind")
-        self._object_kinds[kind] = ObjectKind(
+        updated = ObjectKind(
             name=definition.name,
             object_type=definition.object_type,
             members=(*definition.members, member),
         )
-        self._validate_mapped_links()
+        self._object_kinds[kind] = updated
+        try:
+            self._validate_mapped_links()
+        except Exception:
+            self._object_kinds[kind] = definition
+            raise
 
     def _validate_mapped_links(self) -> None:
         for source_kind, source_provider in self._providers.items():
