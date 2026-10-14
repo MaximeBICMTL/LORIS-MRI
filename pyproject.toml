@@ -137,6 +137,7 @@ Colour = "Colour"  # SQL column name in sex table
 
 [tool.typos.default.extend-identifiers]
 ba = "ba"  # A CLI option of dcm2niix
+PN900 = "PN900"  # MEG CTF documentation part number prefix
 
 [tool.pytest.ini_options]
 # Integration tests are located in `python/tests/integration`, but they should be ran from the
