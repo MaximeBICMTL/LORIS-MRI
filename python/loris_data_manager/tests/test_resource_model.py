@@ -73,7 +73,6 @@ from loris_data_manager.providers.dicom import (
     DICOM_ARCHIVE,
     DICOM_ARCHIVE_FILE_ROWS,
     DICOM_ARCHIVE_SERIES_ROWS,
-    DICOM_ARCHIVE_UPLOAD_ROWS,
     DICOM_PATIENT_NAME,
     DICOM_STUDY_UID,
     LOCAL_PATH_SIZE,
@@ -87,6 +86,13 @@ from loris_data_manager.providers.imaging import (
     ImagingFileObject,
     register_imaging_schema,
 )
+from loris_data_manager.providers.mri_upload import (
+    DICOM_ARCHIVE_MRI_UPLOAD,
+    MRI_UPLOAD,
+    MRI_UPLOAD_DICOM_ARCHIVE,
+    MriUploadObject,
+    register_mri_upload_schema,
+)
 
 READ_CONTEXT = FilesystemPropertyReadContext({})
 
@@ -96,6 +102,7 @@ def make_schema() -> ResourceSchema:
     register_core_schema(schema)
     register_dicom_schema(schema)
     register_imaging_schema(schema)
+    register_mri_upload_schema(schema)
     return schema
 
 
@@ -192,6 +199,149 @@ def add_imaging_file(db: Session, archive: DbDicomArchive) -> DbFile:
     db.add(imaging_file)
     db.flush()
     return imaging_file
+
+
+def mri_upload_for_archive(db: Session, archive: DbDicomArchive) -> DbMriUpload:
+    upload = db.scalar(
+        select(DbMriUpload).where(DbMriUpload.dicom_archive_id == archive.id)
+    )
+    assert upload is not None
+    return upload
+
+
+def test_resolves_mri_upload_with_owned_row_and_non_owning_context(db: Session):
+    archive = add_dicom_archive(db)
+    upload = mri_upload_for_archive(db, archive)
+    schema = make_schema()
+
+    fragment = ResourceModel(schema).resolve(
+        db,
+        schema.provider(MRI_UPLOAD.name),
+        ObjectSelection(
+            refs=frozenset({ObjectRef(MRI_UPLOAD.name, str(upload.id))})
+        ),
+    )
+
+    assert fragment.logical_objects == (MriUploadObject(upload),)
+    assert len(fragment.physical_objects) == 1
+    assert {
+        (link.member.member_name, link.target)
+        for link in fragment.links
+    } == {
+        ("session", ObjectRef(SESSION.name, "7")),
+        ("dicom-archive", ObjectRef(DICOM_ARCHIVE.name, str(archive.id))),
+        ("row", fragment.physical_objects[0].ref),
+    }
+    assert MRI_UPLOAD_DICOM_ARCHIVE.traversal_semantics is RelationshipSemantics.PRODUCES
+    assert MRI_UPLOAD_DICOM_ARCHIVE.lifecycle is LifecycleSemantics.REFERENCES
+
+
+def test_inspection_projects_mri_upload_metadata_and_dicom_archive(db: Session):
+    archive = add_dicom_archive(db)
+    upload = mri_upload_for_archive(db, archive)
+
+    metadata = inspect_resources(
+        db,
+        make_schema(),
+        InspectionQuery(
+            selections=(inspection_selection("mri-upload"),),
+            criteria=parse_where_expressions((f"mri-upload.id={upload.id}",)),
+        ),
+    )
+    archive_projection = inspect_resources(
+        db,
+        make_schema(),
+        InspectionQuery(
+            selections=(inspection_selection("mri-upload.dicom-archive.id"),),
+            criteria=parse_where_expressions((f"mri-upload.id={upload.id}",)),
+        ),
+    )
+
+    document = json.loads(format_inspection_json(metadata))
+    upload_document = next(
+        obj for obj in document["objects"] if obj["kind"] == MRI_UPLOAD.name
+    )
+    assert upload_document["properties"] == {
+        "id": upload.id,
+        "uploaded-by": "admin",
+        "patient-name": "DCC001_000001_V1",
+        "insertion-complete": False,
+        "inserting": None,
+        "minc-inserted-count": None,
+        "minc-created-count": None,
+        "candidate-info-validated": None,
+        "dicom-archive-validated": False,
+        "phantom": False,
+    }
+    assert archive_projection.selected == {
+        ObjectRef(DICOM_ARCHIVE.name, str(archive.id))
+    }
+
+
+def test_inspection_projects_dicom_archive_mri_uploads_in_one_batch(db: Session):
+    archive = add_dicom_archive(db)
+    upload = mri_upload_for_archive(db, archive)
+    second_upload = DbMriUpload(
+        uploaded_by="admin",
+        upload_path=Path("uploads/archive-retry.tar"),
+        decompressed_path=Path("uploads/archive-retry"),
+        patient_name="DCC001_000001_V1",
+        dicom_archive_id=archive.id,
+        session_id=7,
+    )
+    db.add(second_upload)
+    db.flush()
+    statements: list[str] = []
+
+    def record_statement(*args: Any) -> None:
+        statements.append(args[2])
+
+    assert db.bind is not None
+    event.listen(db.bind, "before_cursor_execute", record_statement)
+    try:
+        result = inspect_resources(
+            db,
+            make_schema(),
+            InspectionQuery(
+                selections=(inspection_selection("dicom-archive.mri-upload.id"),),
+                criteria=parse_where_expressions((f"dicom-archive.id={archive.id}",)),
+            ),
+        )
+    finally:
+        event.remove(db.bind, "before_cursor_execute", record_statement)
+
+    assert result.selected == {
+        ObjectRef(MRI_UPLOAD.name, str(upload.id)),
+        ObjectRef(MRI_UPLOAD.name, str(second_upload.id)),
+    }
+    assert len(statements) == 3
+    assert "FROM mri_upload" in statements[1]
+    assert "TarchiveID" in statements[1]
+    assert " IN (" in statements[1]
+    assert DICOM_ARCHIVE_MRI_UPLOAD.traversal_semantics is RelationshipSemantics.DERIVED_FROM
+    assert DICOM_ARCHIVE_MRI_UPLOAD.lifecycle is LifecycleSemantics.REFERENCES
+
+
+def test_mri_upload_session_and_dicom_archive_are_optional(db: Session):
+    upload = DbMriUpload(
+        uploaded_by="admin",
+        upload_path=Path("uploads/pending.tar"),
+        decompressed_path=Path("uploads/pending"),
+        patient_name="pending",
+    )
+    db.add(upload)
+    db.flush()
+    schema = make_schema()
+
+    fragment = ResourceModel(schema).resolve(
+        db,
+        schema.provider(MRI_UPLOAD.name),
+        ObjectSelection(
+            refs=frozenset({ObjectRef(MRI_UPLOAD.name, str(upload.id))})
+        ),
+    )
+
+    assert {link.member.member_name for link in fragment.links} == {"row"}
 
 
 def test_resolves_imaging_file_with_owned_resources_and_descriptive_provenance(db: Session):
@@ -459,6 +609,7 @@ def test_schema_can_be_extended_without_modifying_core_types():
         "visit",
         "dicom-archive",
         "imaging-file",
+        "mri-upload",
         "database-row",
         "local-path",
         "example.genetic-dataset",
@@ -610,7 +761,6 @@ def test_printed_sql_uses_joins_and_can_be_planned_without_a_database():
     assert "ArchiveLocation" not in anchor_select
     assert "load DICOM series rows" not in output
     assert "load DICOM file rows" not in output
-    assert "load MRI upload rows" not in output
 
 
 def test_cli_print_sql_does_not_open_a_database_session(monkeypatch: pytest.MonkeyPatch):
@@ -719,7 +869,6 @@ def test_whole_dicom_sql_plan_omits_on_demand_collection_steps():
 
     assert "load DICOM series rows" not in output
     assert "load DICOM file rows" not in output
-    assert "load MRI upload rows" not in output
     assert "IN (__anchor_ids)" not in output
 
 
@@ -728,7 +877,7 @@ def test_expensive_members_are_declared_on_demand():
     assert {
         DICOM_ARCHIVE_SERIES_ROWS.load_policy,
         DICOM_ARCHIVE_FILE_ROWS.load_policy,
-        DICOM_ARCHIVE_UPLOAD_ROWS.load_policy,
+        DICOM_ARCHIVE_MRI_UPLOAD.load_policy,
     } == {LoadPolicy.ON_DEMAND}
 
 
@@ -1485,7 +1634,6 @@ def test_inspection_selects_to_many_collection_member_in_one_batch(db: Session):
     sql = format_inspection_sql(plan_inspection(schema, query), mysql.dialect())
     assert "load DICOM series rows" in sql
     assert "load DICOM file rows" not in sql
-    assert "load MRI upload rows" not in sql
 
 
 def test_empty_to_many_projection_is_distinct_from_no_anchor_match(db: Session):
@@ -1669,7 +1817,7 @@ def test_inspection_can_expand_related_session_and_render_text_and_json(db: Sess
     assert "file [owns] -> local-path:dicom-archive:2026/archive.tar" in text
     assert "series-row [owns; on-demand]: not loaded" in text
     assert "file-row [owns; on-demand]: not loaded" in text
-    assert "upload-row [references; on-demand]: not loaded" in text
+    assert "mri-upload [references; on-demand]: not loaded" in text
 
     document = json.loads(format_inspection_json(result))
     assert document["selected"] == [f"dicom-archive:{archive.id}"]
@@ -1690,7 +1838,7 @@ def test_inspection_can_expand_related_session_and_render_text_and_json(db: Sess
     assert archive_document["unloaded"]["links"] == [
         "series-row",
         "file-row",
-        "upload-row",
+        "mri-upload",
     ]
 
 

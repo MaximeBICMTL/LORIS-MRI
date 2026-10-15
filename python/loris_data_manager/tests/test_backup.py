@@ -306,6 +306,54 @@ def test_imaging_file_backup_captures_its_row_and_file_without_its_source_archiv
     }
 
 
+def test_mri_upload_backup_captures_only_its_explicitly_selected_row(
+    db_engine: Engine,
+    tmp_path: Path,
+):
+    with Session(db_engine) as db:
+        archive = _add_archive(db)
+        upload = db.scalar(
+            select(DbMriUpload).where(DbMriUpload.dicom_archive_id == archive.id)
+        )
+        assert upload is not None
+        upload_id = upload.id
+        db.add(
+            DbFile(
+                session_id=1,
+                path=Path("assembly/example/native/example.mnc"),
+                output_type="native",
+                inserted_by_user_id="admin",
+                dicom_archive_id=archive.id,
+            )
+        )
+        db.commit()
+    output = tmp_path / "backup"
+    schema = make_resource_schema()
+
+    result = create_backup(
+        db_engine,
+        schema,
+        BackupRequest(
+            output=output,
+            selection=BackupSelection(
+                kind="mri-upload",
+                criteria=(schema.criterion("mri-upload.id", upload_id),),
+            ),
+            storage_roots={},
+        ),
+    )
+
+    assert result.selected_object_count == 1
+    assert result.database_row_count == 1
+    assert result.file_count == 0
+    assert result.blocker_count == 0
+    restore_sql = (output / "restore.sql").read_text()
+    assert "INSERT INTO `mri_upload` " in restore_sql
+    assert "INSERT INTO `tarchive` " not in restore_sql
+    assert "INSERT INTO `files` " not in restore_sql
+    verify_backup(output)
+
+
 def test_backup_copies_the_target_of_an_archive_symlink(db_engine: Engine, tmp_path: Path):
     with Session(db_engine) as db:
         archive = _add_archive(db)
@@ -384,6 +432,7 @@ def test_backup_plan_is_inferred_for_any_owned_orm_entity(db_engine: Engine):
     assert required_storage_roots(schema, "candidate") == ()
     assert required_storage_roots(schema, "dicom-archive") == ("dicom-archive",)
     assert required_storage_roots(schema, "imaging-file") == ("imaging-data",)
+    assert required_storage_roots(schema, "mri-upload") == ()
 
 
 def test_backup_discovers_reference_from_table_unknown_to_orm(

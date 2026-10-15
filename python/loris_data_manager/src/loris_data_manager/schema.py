@@ -383,6 +383,7 @@ class RelationshipSemantics(StrEnum):
     CONTAINS = "contains"
     BELONGS_TO = "belongs-to"
     DERIVED_FROM = "derived-from"
+    PRODUCES = "produces"
     REFERENCES = "references"
 
 

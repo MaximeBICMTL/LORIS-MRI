@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from lib.db.models.dicom_archive import DbDicomArchive
 from lib.db.models.dicom_archive_file import DbDicomArchiveFile
 from lib.db.models.dicom_archive_series import DbDicomArchiveSeries
-from lib.db.models.mri_upload import DbMriUpload
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -144,20 +143,6 @@ DICOM_ARCHIVE_FILE_ROWS = LinkMember[DicomArchiveObject](
     lifecycle=LifecycleSemantics.OWNS,
     load_policy=LoadPolicy.ON_DEMAND,
 )
-DICOM_ARCHIVE_UPLOAD_ROWS = LinkMember[DicomArchiveObject](
-    name="upload-row",
-    source_kind=DICOM_ARCHIVE_KIND,
-    target_kind=DATABASE_ROW_KIND,
-    source=BatchLinkSource.database_rows(
-        source_kind=DICOM_ARCHIVE_KIND,
-        source_attribute=DbDicomArchive.id,
-        target_attribute=DbMriUpload.dicom_archive_id,
-        name="load MRI upload rows",
-        input_name="dicom_archive_ids",
-    ),
-    lifecycle=LifecycleSemantics.REFERENCES,
-    load_policy=LoadPolicy.ON_DEMAND,
-)
 DICOM_ARCHIVE_FILE = LinkMember[DicomArchiveObject](
     name="file",
     source_kind=DICOM_ARCHIVE_KIND,
@@ -184,7 +169,6 @@ DICOM_ARCHIVE = ObjectKind(
         DICOM_ARCHIVE_ROW,
         DICOM_ARCHIVE_SERIES_ROWS,
         DICOM_ARCHIVE_FILE_ROWS,
-        DICOM_ARCHIVE_UPLOAD_ROWS,
         DICOM_ARCHIVE_FILE,
     ),
 )
