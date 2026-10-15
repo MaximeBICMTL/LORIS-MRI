@@ -7,7 +7,10 @@ from lib.db.models.candidate import DbCandidate
 from lib.db.models.dicom_archive import DbDicomArchive
 from lib.db.models.dicom_archive_file import DbDicomArchiveFile
 from lib.db.models.dicom_archive_series import DbDicomArchiveSeries
+from lib.db.models.file import DbFile
+from lib.db.models.file_parameter import DbFileParameter
 from lib.db.models.mri_upload import DbMriUpload
+from lib.db.models.parameter_type import DbParameterType
 from sqlalchemy import Column, Engine, ForeignKey, Integer, MetaData, String, Table, event, select
 from sqlalchemy.dialects import mysql
 from sqlalchemy.engine import Connection
@@ -187,6 +190,122 @@ def test_backup_verification_detects_a_modified_file(db_engine: Engine, tmp_path
         verify_backup(output)
 
 
+def test_imaging_file_backup_captures_its_row_and_file_without_its_source_archive(
+    db_engine: Engine,
+    tmp_path: Path,
+):
+    with Session(db_engine) as db:
+        archive = _add_archive(db)
+        imaging_file = DbFile(
+            session_id=1,
+            path=Path("assembly/example/native/example.mnc"),
+            output_type="native",
+            inserted_by_user_id="admin",
+            dicom_archive_id=archive.id,
+        )
+        db.add(imaging_file)
+        db.flush()
+        parameter_types = {
+            name: DbParameterType(id=index, name=name)
+            for index, name in enumerate(
+                (
+                    "modality",
+                    "bids_json_file",
+                    "bids_bval",
+                    "bids_bvec",
+                    "check_pic_filename",
+                ),
+                start=1000,
+            )
+        }
+        db.add_all(parameter_types.values())
+        db.flush()
+        db.add_all(
+            (
+                DbFileParameter(
+                    file_id=imaging_file.id,
+                    type_id=parameter_types["modality"].id,
+                    value="MR",
+                ),
+                DbFileParameter(
+                    file_id=imaging_file.id,
+                    type_id=parameter_types["bids_json_file"].id,
+                    value="bids/example.json",
+                ),
+                DbFileParameter(
+                    file_id=imaging_file.id,
+                    type_id=parameter_types["bids_bval"].id,
+                    value="bids/example.bval",
+                ),
+                DbFileParameter(
+                    file_id=imaging_file.id,
+                    type_id=parameter_types["bids_bvec"].id,
+                    value="bids/example.bvec",
+                ),
+                DbFileParameter(
+                    file_id=imaging_file.id,
+                    type_id=parameter_types["check_pic_filename"].id,
+                    value="example/preview.png",
+                ),
+            )
+        )
+        imaging_file_id = imaging_file.id
+        db.commit()
+    data_root = tmp_path / "data-root"
+    source = data_root / "assembly" / "example" / "native" / "example.mnc"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"derived imaging data")
+    auxiliary_files = {
+        "bids/example.json": b"{}",
+        "bids/example.bval": b"0 1000",
+        "bids/example.bvec": b"1 0 0",
+        "pic/example/preview.png": b"preview",
+    }
+    for relative_path, contents in auxiliary_files.items():
+        auxiliary = data_root / relative_path
+        auxiliary.parent.mkdir(parents=True, exist_ok=True)
+        auxiliary.write_bytes(contents)
+    output = tmp_path / "backup"
+    schema = make_resource_schema()
+
+    result = create_backup(
+        db_engine,
+        schema,
+        BackupRequest(
+            output=output,
+            selection=BackupSelection(
+                kind="imaging-file",
+                criteria=(schema.criterion("imaging-file.id", imaging_file_id),),
+            ),
+            storage_roots={"imaging-data": data_root},
+        ),
+    )
+
+    assert result.selected_object_count == 1
+    assert result.database_row_count == 6
+    assert result.file_count == 5
+    assert result.blocker_count == 0
+    assert (
+        output / "files" / "imaging-data" / "assembly" / "example" / "native" / "example.mnc"
+    ).read_bytes() == b"derived imaging data"
+    restore_sql = (output / "restore.sql").read_text()
+    assert "INSERT INTO `files` " in restore_sql
+    assert restore_sql.count("INSERT INTO `parameter_file` ") == 5
+    assert "INSERT INTO `parameter_type` " not in restore_sql
+    assert "INSERT INTO `tarchive` " not in restore_sql
+    manifest = verify_backup(output)
+    backed_up_paths = {
+        entry["relative_path"] for entry in cast(list[dict[str, object]], manifest["files"])
+    }
+    assert backed_up_paths == {
+        "assembly/example/native/example.mnc",
+        "bids/example.json",
+        "bids/example.bval",
+        "bids/example.bvec",
+        "pic/example/preview.png",
+    }
+
+
 def test_backup_copies_the_target_of_an_archive_symlink(db_engine: Engine, tmp_path: Path):
     with Session(db_engine) as db:
         archive = _add_archive(db)
@@ -264,6 +383,7 @@ def test_backup_plan_is_inferred_for_any_owned_orm_entity(db_engine: Engine):
     assert [table.table for table in plan.tables] == [DbCandidate.__table__]
     assert required_storage_roots(schema, "candidate") == ()
     assert required_storage_roots(schema, "dicom-archive") == ("dicom-archive",)
+    assert required_storage_roots(schema, "imaging-file") == ("imaging-data",)
 
 
 def test_backup_discovers_reference_from_table_unknown_to_orm(

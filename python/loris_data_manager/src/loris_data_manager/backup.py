@@ -11,7 +11,7 @@ import shutil
 import stat
 import tempfile
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
@@ -28,10 +28,13 @@ from loris_data_manager.provider import ResourceModel, ResourceSchema
 from loris_data_manager.resources import LocalPathRef, LocalPathType
 from loris_data_manager.schema import (
     BatchLinkSource,
+    DatabaseRowSetBinding,
     LifecycleSemantics,
     LocalPathColumnSource,
+    LocalPathSetBinding,
     OrmEntitySource,
     PropertyCriterion,
+    local_path_mapping,
 )
 
 BACKUP_FORMAT = "loris-resource-backup"
@@ -87,6 +90,7 @@ class FileBackup:
     object_identity: Column[Any]
     storage_root: str
     path_attribute: Column[Any]
+    path_prefix: PurePosixPath = field(default_factory=PurePosixPath)
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,11 +124,25 @@ class DatabaseReferenceCheck:
 
 
 @dataclass(frozen=True, slots=True)
+class FileCollectionBackup:
+    """Owned file paths selected from rows related to the logical anchor."""
+
+    table: Table
+    statement: Select[Any]
+    object_kind: str
+    object_identity: Column[Any]
+    storage_root: str
+    path_attribute: Column[Any]
+    path_prefix: PurePosixPath = field(default_factory=PurePosixPath)
+
+
+@dataclass(frozen=True, slots=True)
 class BackupPlan:
     """Kind-specific physical capture plan consumed by the generic executor."""
 
     kind: str
     tables: tuple[DatabaseTableBackup, ...]
+    files: tuple[FileCollectionBackup, ...] = ()
     references: tuple[DatabaseReferenceCheck, ...] = ()
 
     def __post_init__(self) -> None:
@@ -212,6 +230,7 @@ def _plan_backup_from_selection(
     selected_ids = selected_values(anchor_identity, "identities")
     tables: list[DatabaseTableBackup] = []
     anchor_files: list[FileBackup] = []
+    file_collections: list[FileCollectionBackup] = []
 
     for link in schema.links(kind):
         if link.lifecycle is LifecycleSemantics.OWNS:
@@ -220,13 +239,14 @@ def _plan_backup_from_selection(
                     raise ValueError(f"Owned entity link {kind}.{link.name} is not a database row")
                 continue
             if isinstance(link.source, LocalPathColumnSource):
-                schema.storage_root(link.source.storage_root)
-                if link.source.expected_type is not LocalPathType.FILE:
+                path = link.source.path
+                schema.storage_root(path.storage_root)
+                if path.expected_type is not LocalPathType.FILE:
                     raise ValueError(
                         f"Owned path {kind}.{link.name} is not a regular file"
                     )
-                path_column = _mapped_column(link.source.attribute)
-                if link.source.attribute.class_ is not provider.orm_model:
+                path_column = _mapped_column(path.attribute)
+                if path.attribute.class_ is not provider.orm_model:
                     raise ValueError(
                         f"Path source for {kind}.{link.name} does not belong to its provider"
                     )
@@ -234,21 +254,43 @@ def _plan_backup_from_selection(
                     FileBackup(
                         object_kind=kind,
                         object_identity=anchor_identity,
-                        storage_root=link.source.storage_root,
+                        storage_root=path.storage_root,
                         path_attribute=path_column,
+                        path_prefix=path.path_prefix,
                     )
                 )
                 continue
             if isinstance(link.source, BatchLinkSource):
-                tables.append(
-                    _plan_batch_table(
-                        selected_values,
-                        kind,
-                        link.name,
-                        link.source,
-                        action="delete",
+                binding = link.source.set_binding
+                if isinstance(binding, DatabaseRowSetBinding):
+                    tables.append(
+                        _plan_batch_table(
+                            selected_values,
+                            kind,
+                            link.name,
+                            binding,
+                            action="delete",
+                        )
                     )
-                )
+                elif isinstance(binding, LocalPathSetBinding):
+                    schema.storage_root(binding.path.storage_root)
+                    if binding.path.expected_type is not LocalPathType.FILE:
+                        raise ValueError(
+                            f"Owned path {kind}.{link.name} is not a regular file"
+                        )
+                    file_collections.append(
+                        _plan_batch_files(
+                            selected_values,
+                            kind,
+                            link.name,
+                            link.source,
+                            binding,
+                        )
+                    )
+                else:
+                    raise ValueError(
+                        f"Owned batch link {kind}.{link.name} has no set-oriented binding"
+                    )
                 continue
             raise ValueError(
                 f"Owned link {kind}.{link.name} has no set-oriented resource source"
@@ -278,6 +320,7 @@ def _plan_backup_from_selection(
     return BackupPlan(
         kind=kind,
         tables=ordered_tables,
+        files=tuple(file_collections),
         references=tuple(references),
     )
 
@@ -286,28 +329,25 @@ def required_storage_roots(schema: ResourceSchema, kind: str) -> tuple[str, ...]
     """Return storage roots reached by owned local-path links of an object kind."""
 
     schema.provider(kind)
-    return tuple(
-        dict.fromkeys(
-            link.source.storage_root
-            for link in schema.links(kind)
-            if link.lifecycle is LifecycleSemantics.OWNS
-            and isinstance(link.source, LocalPathColumnSource)
-        )
+    paths = (
+        path
+        for link in schema.links(kind)
+        if link.lifecycle is LifecycleSemantics.OWNS
+        if (path := local_path_mapping(link.source)) is not None
     )
+    return tuple(dict.fromkeys(path.storage_root for path in paths))
 
 
 def _plan_batch_table(
     selected_values: Any,
     kind: str,
     member_name: str,
-    source: BatchLinkSource,
+    binding: DatabaseRowSetBinding,
     *,
     action: str,
 ) -> DatabaseTableBackup:
-    source_attribute = source.set_source_attribute
-    target_attribute = source.set_target_attribute
-    if source_attribute is None or target_attribute is None:
-        raise ValueError(f"Link {kind}.{member_name} has no set-oriented mapping")
+    source_attribute = binding.source_attribute
+    target_attribute = binding.target_attribute
     values = selected_values(source_attribute, member_name)
     table = _model_table(target_attribute.class_)
     target_column = _mapped_column(target_attribute)
@@ -324,6 +364,36 @@ def _plan_batch_table(
             parent_column=source_column,
             child_column=target_column,
         ),
+    )
+
+
+def _plan_batch_files(
+    selected_values: Any,
+    kind: str,
+    member_name: str,
+    source: BatchLinkSource,
+    binding: LocalPathSetBinding,
+) -> FileCollectionBackup:
+    values = selected_values(binding.source_attribute, member_name)
+    table = _model_table(binding.owner_attribute.class_)
+    owner_column = _mapped_column(binding.owner_attribute)
+    path_column = _mapped_column(binding.path.attribute)
+    statement = (
+        source.statement_for_keys(select(next(iter(values.c))))
+        .with_only_columns(
+            owner_column.label("object_identity"),
+            path_column.label("relative_path"),
+        )
+        .order_by(*table.primary_key.columns)
+    )
+    return FileCollectionBackup(
+        table=table,
+        statement=cast(Select[Any], statement),
+        object_kind=kind,
+        object_identity=owner_column,
+        storage_root=binding.path.storage_root,
+        path_attribute=path_column,
+        path_prefix=binding.path.path_prefix,
     )
 
 
@@ -639,6 +709,8 @@ def create_backup(
                             row_count = cast(int, entry["row_count"])
                             database_row_count += row_count
                             pending_files.extend(files)
+                        for file_plan in plan.files:
+                            pending_files.extend(_read_file_collection(db, file_plan))
                         restore_sql.write("COMMIT;\n")
                         restore_sql.flush()
                         os.fsync(restore_sql.fileno())
@@ -792,12 +864,17 @@ def _write_database_table(
         for file_plan in plan.files:
             raw_path = values[file_plan.path_attribute.key]
             if raw_path is not None:
+                relative_path = _validated_relative_path(
+                    file_plan.storage_root, raw_path
+                )
+                if file_plan.path_prefix.parts:
+                    relative_path = file_plan.path_prefix / relative_path
                 pending_files.append(
                     _PendingFile(
                         object_kind=file_plan.object_kind,
                         object_id=str(values[file_plan.object_identity.key]),
                         storage_root=file_plan.storage_root,
-                        relative_path=_validated_relative_path(file_plan.storage_root, raw_path),
+                        relative_path=relative_path,
                     )
                 )
     restore_sql.write("\n")
@@ -833,6 +910,32 @@ def _describe_references(
         "row_count": row_count,
         "content_sha256": digest.hexdigest(),
     }
+
+
+def _read_file_collection(
+    db: Session,
+    plan: FileCollectionBackup,
+) -> list[_PendingFile]:
+    pending_files: list[_PendingFile] = []
+    result = db.execute(
+        plan.statement.with_for_update().execution_options(yield_per=ROW_BATCH_SIZE)
+    ).mappings()
+    for row in result:
+        raw_path = row["relative_path"]
+        if raw_path is None:
+            continue
+        relative_path = _validated_relative_path(plan.storage_root, raw_path)
+        if plan.path_prefix.parts:
+            relative_path = plan.path_prefix / relative_path
+        pending_files.append(
+            _PendingFile(
+                object_kind=plan.object_kind,
+                object_id=str(row["object_identity"]),
+                storage_root=plan.storage_root,
+                relative_path=relative_path,
+            )
+        )
+    return pending_files
 
 
 def _copy_files(

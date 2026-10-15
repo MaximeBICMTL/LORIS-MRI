@@ -24,6 +24,7 @@ from loris_data_manager.schema import (
     LinkMember,
     LoadPolicy,
     LocalPathColumnSource,
+    LocalPathMapping,
     ObjectKind,
     ObjectSelection,
     OrmColumnSource,
@@ -162,9 +163,11 @@ DICOM_ARCHIVE_FILE = LinkMember[DicomArchiveObject](
     source_kind=DICOM_ARCHIVE_KIND,
     target_kind=LOCAL_PATH_KIND,
     source=LocalPathColumnSource(
-        attribute=DbDicomArchive.path,
-        storage_root="dicom-archive",
-        expected_type=LocalPathType.FILE,
+        LocalPathMapping(
+            attribute=DbDicomArchive.path,
+            storage_root="dicom-archive",
+            expected_type=LocalPathType.FILE,
+        )
     ),
     lifecycle=LifecycleSemantics.OWNS,
 )

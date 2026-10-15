@@ -32,7 +32,11 @@ from loris_data_manager.inspection import (
 from loris_data_manager.provider import ResourceSchema
 from loris_data_manager.providers.core import register_core_schema
 from loris_data_manager.providers.dicom import register_dicom_schema
-from loris_data_manager.schema import PropertyCriterion
+from loris_data_manager.providers.imaging import register_imaging_schema
+from loris_data_manager.schema import (
+    PropertyCriterion,
+    local_path_mapping,
+)
 
 app = typer.Typer(
     add_completion=False,
@@ -53,6 +57,7 @@ def make_resource_schema() -> ResourceSchema:
     schema = ResourceSchema()
     register_core_schema(schema)
     register_dicom_schema(schema)
+    register_imaging_schema(schema)
     return schema
 
 
@@ -123,13 +128,21 @@ def inspect(
             return
         with Session(engine) as db:
             storage_roots: dict[str, Path] = {}
-            if any(selection.expression == "dicom-archive.file.size" for selection in query.selections):
-                archive_root = try_get_config_with_setting_name(db, "tarchiveLibraryDir")
-                if archive_root is None or archive_root.value is None:
+            required_roots = {
+                path.storage_root
+                for selection in query.selections
+                if selection.property_name == "size"
+                for link in schema.path_links(selection.path)[-1:]
+                if (path := local_path_mapping(link.source)) is not None
+            }
+            for name in required_roots:
+                root = schema.storage_root(name)
+                configured = try_get_config_with_setting_name(db, root.config_setting)
+                if configured is None or configured.value is None:
                     raise typer.BadParameter(
-                        "Missing tarchiveLibraryDir configuration for file inspection"
+                        f"Missing {root.config_setting} configuration for file inspection"
                     )
-                storage_roots["dicom-archive"] = Path(archive_root.value)
+                storage_roots[root.name] = Path(configured.value)
             result = execute_inspection_plan(db, plan, storage_roots=storage_roots)
             formatter = (
                 format_inspection_json

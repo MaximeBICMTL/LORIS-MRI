@@ -145,7 +145,9 @@ def format_inspection_sql(plan: InspectionPlan, dialect: Dialect) -> str:
         f"{sql};",
     ]
     batch_links = tuple(
-        planned for planned in plan.links if isinstance(planned.link.source, BatchLinkSource)
+        planned
+        for planned in plan.links
+        if isinstance(planned.link.source, BatchLinkSource)
     )
     for index, planned in enumerate(batch_links, start=2):
         source = planned.link.source

@@ -9,7 +9,10 @@ from lib.db.models.candidate import DbCandidate
 from lib.db.models.dicom_archive import DbDicomArchive
 from lib.db.models.dicom_archive_file import DbDicomArchiveFile
 from lib.db.models.dicom_archive_series import DbDicomArchiveSeries
+from lib.db.models.file import DbFile
+from lib.db.models.file_parameter import DbFileParameter
 from lib.db.models.mri_upload import DbMriUpload
+from lib.db.models.parameter_type import DbParameterType
 from lib.db.models.project import DbProject
 from lib.db.models.session import DbSession
 from lib.db.models.site import DbSite
@@ -78,6 +81,12 @@ from loris_data_manager.providers.dicom import (
     DicomArchiveProvider,
     register_dicom_schema,
 )
+from loris_data_manager.providers.imaging import (
+    IMAGING_FILE,
+    IMAGING_FILE_SOURCE_ARCHIVE,
+    ImagingFileObject,
+    register_imaging_schema,
+)
 
 READ_CONTEXT = FilesystemPropertyReadContext({})
 
@@ -86,6 +95,7 @@ def make_schema() -> ResourceSchema:
     schema = ResourceSchema()
     register_core_schema(schema)
     register_dicom_schema(schema)
+    register_imaging_schema(schema)
     return schema
 
 
@@ -166,6 +176,138 @@ def add_dicom_archive(db: Session) -> DbDicomArchive:
     db.flush()
     db.expire(archive, ("series", "files"))
     return archive
+
+
+def add_imaging_file(db: Session, archive: DbDicomArchive) -> DbFile:
+    imaging_file = DbFile(
+        session_id=archive.session_id,
+        path=Path("assembly/000001/V1/mri/native/example.mnc"),
+        series_uid="1.2.3.4.5",
+        output_type="native",
+        scan_type_id=7,
+        file_type="mnc",
+        inserted_by_user_id="admin",
+        dicom_archive_id=archive.id,
+    )
+    db.add(imaging_file)
+    db.flush()
+    return imaging_file
+
+
+def test_resolves_imaging_file_with_owned_resources_and_descriptive_provenance(db: Session):
+    archive = add_dicom_archive(db)
+    imaging_file = add_imaging_file(db, archive)
+    schema = make_schema()
+    model = ResourceModel(schema)
+
+    fragment = model.resolve(
+        db,
+        schema.provider(IMAGING_FILE.name),
+        ObjectSelection(refs=frozenset({ObjectRef(IMAGING_FILE.name, str(imaging_file.id))})),
+    )
+
+    assert fragment.logical_objects == (ImagingFileObject(imaging_file),)
+    assert len(fragment.physical_objects) == 2
+    assert {
+        schema.link(link.member.object_kind, link.member.member_name).lifecycle
+        for link in fragment.links
+    } == {LifecycleSemantics.OWNS, LifecycleSemantics.REFERENCES}
+    assert IMAGING_FILE_SOURCE_ARCHIVE.traversal_semantics is RelationshipSemantics.DERIVED_FROM
+    assert IMAGING_FILE_SOURCE_ARCHIVE.lifecycle is LifecycleSemantics.REFERENCES
+
+
+def test_inspection_projects_imaging_file_source_archive(db: Session):
+    archive = add_dicom_archive(db)
+    imaging_file = add_imaging_file(db, archive)
+
+    result = inspect_resources(
+        db,
+        make_schema(),
+        InspectionQuery(
+            selections=(inspection_selection("imaging-file.source-archive.id"),),
+            criteria=parse_where_expressions((f"imaging-file.id={imaging_file.id}",)),
+        ),
+    )
+
+    assert result.selected == {ObjectRef(DICOM_ARCHIVE.name, str(archive.id))}
+    document = json.loads(format_inspection_json(result))
+    assert document["objects"] == [
+        {
+            "id": f"dicom-archive:{archive.id}",
+            "kind": "dicom-archive",
+            "role": "selected",
+            "properties": {"id": archive.id},
+            "key": str(archive.id),
+        }
+    ]
+
+
+def test_inspection_projects_imaging_file_properties_and_owned_path(db: Session):
+    archive = add_dicom_archive(db)
+    imaging_file = add_imaging_file(db, archive)
+
+    result = inspect_resources(
+        db,
+        make_schema(),
+        InspectionQuery(
+            selections=(inspection_selection("imaging-file"),),
+            criteria=parse_where_expressions(("imaging-file.file-type=mnc",)),
+        ),
+    )
+
+    document = json.loads(format_inspection_json(result))
+    imaging_object = next(obj for obj in document["objects"] if obj["kind"] == "imaging-file")
+    assert imaging_object["properties"] == {
+        "id": imaging_file.id,
+        "output-type": "native",
+        "file-type": "mnc",
+        "series-uid": "1.2.3.4.5",
+        "scan-type-id": 7,
+    }
+    assert "local-path:imaging-data:assembly/000001/V1/mri/native/example.mnc" in {
+        link["target"] for link in document["links"] if link["member"] == "imaging-file.file"
+    }
+
+
+def test_inspection_projects_optional_parameter_files(db: Session):
+    archive = add_dicom_archive(db)
+    imaging_file = add_imaging_file(db, archive)
+    json_type = DbParameterType(id=1000, name="bids_json_file")
+    preview_type = DbParameterType(id=1001, name="check_pic_filename")
+    db.add_all((json_type, preview_type))
+    db.flush()
+    db.add_all(
+        (
+            DbFileParameter(
+                file_id=imaging_file.id,
+                type_id=json_type.id,
+                value="bids/example.json",
+            ),
+            DbFileParameter(
+                file_id=imaging_file.id,
+                type_id=preview_type.id,
+                value="example/preview.png",
+            ),
+        )
+    )
+    db.flush()
+
+    result = inspect_resources(
+        db,
+        make_schema(),
+        InspectionQuery(
+            selections=(
+                inspection_selection("imaging-file.bids-json-sidecar"),
+                inspection_selection("imaging-file.preview-image"),
+            ),
+            criteria=parse_where_expressions((f"imaging-file.id={imaging_file.id}",)),
+        ),
+    )
+
+    assert result.selected == {
+        LocalPathRef("imaging-data", PurePosixPath("bids/example.json")),
+        LocalPathRef("imaging-data", PurePosixPath("pic/example/preview.png")),
+    }
 
 
 def test_resolves_typed_logical_object_with_default_database_and_file_resources(db: Session):
@@ -316,6 +458,7 @@ def test_schema_can_be_extended_without_modifying_core_types():
         "candidate",
         "visit",
         "dicom-archive",
+        "imaging-file",
         "database-row",
         "local-path",
         "example.genetic-dataset",

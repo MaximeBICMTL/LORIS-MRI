@@ -5,7 +5,7 @@ objects projected from those models and the relationships between those objects.
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Any, Generic, Protocol, TypeAlias, TypeVar, cast
@@ -374,7 +374,7 @@ class StorageRoot:
 
 
 class RelationshipSemantics(StrEnum):
-    """Broad lifecycle meaning of a relationship.
+    """Descriptive meaning of a relationship.
 
     These values are descriptive.  A future operation policy will decide whether
     and in which direction a particular relationship is traversed for deletion.
@@ -452,6 +452,44 @@ class CallableLinkSource(Generic[ObjectT]):
 
 
 @dataclass(frozen=True, slots=True)
+class LocalPathMapping:
+    """Map one ORM attribute into a path within a named storage root."""
+
+    attribute: InstrumentedAttribute[Any]
+    storage_root: str
+    expected_type: LocalPathType
+    path_prefix: PurePosixPath = field(default_factory=PurePosixPath)
+
+    def target_from_value(self, value: Any) -> LocalPathObject:
+        path = value.as_posix() if hasattr(value, "as_posix") else str(value)
+        return LocalPathObject(
+            storage_root=self.storage_root,
+            relative_path=self.path_prefix / PurePosixPath(path),
+            expected_type=self.expected_type,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DatabaseRowSetBinding:
+    """Set-oriented mapping from logical objects to related database rows."""
+
+    source_attribute: InstrumentedAttribute[Any]
+    target_attribute: InstrumentedAttribute[Any]
+
+
+@dataclass(frozen=True, slots=True)
+class LocalPathSetBinding:
+    """Set-oriented mapping from logical objects to paths stored in related rows."""
+
+    source_attribute: InstrumentedAttribute[Any]
+    owner_attribute: InstrumentedAttribute[Any]
+    path: LocalPathMapping
+
+
+BatchSetBinding: TypeAlias = DatabaseRowSetBinding | LocalPathSetBinding
+
+
+@dataclass(frozen=True, slots=True)
 class BatchLinkSource:
     """Object-valued member resolved for many source objects in one SQL query."""
 
@@ -461,8 +499,7 @@ class BatchLinkSource:
     input_key: Callable[[ResourceRef], object]
     target_from_row: Callable[[Any], tuple[ResourceRef, ObjectRef | PhysicalObject]]
     batch_size: int = 500
-    set_source_attribute: InstrumentedAttribute[Any] | None = None
-    set_target_attribute: InstrumentedAttribute[Any] | None = None
+    set_binding: BatchSetBinding | None = None
 
     @classmethod
     def database_rows(
@@ -494,8 +531,7 @@ class BatchLinkSource:
                 DatabaseRowObject(row),
             ),
             batch_size=batch_size,
-            set_source_attribute=source_attribute,
-            set_target_attribute=target_attribute,
+            set_binding=DatabaseRowSetBinding(source_attribute, target_attribute),
         )
 
     def targets(
@@ -647,26 +683,18 @@ class OrmColumnLinkSource(Generic[ValueT]):
 class LocalPathColumnSource:
     """Local path derived from a mapped column and a named storage root."""
 
-    attribute: InstrumentedAttribute[Any]
-    storage_root: str
-    expected_type: LocalPathType
+    path: LocalPathMapping
 
     def targets(self, obj: Any, target_kind: str) -> tuple[LocalPathObject, ...]:
         del target_kind
-        value = getattr(getattr(obj, "orm"), self.attribute.key)
+        value = getattr(getattr(obj, "orm"), self.path.attribute.key)
         if value is None:
             return ()
-        return (
-            LocalPathObject(
-                storage_root=self.storage_root,
-                relative_path=PurePosixPath(value.as_posix()),
-                expected_type=self.expected_type,
-            ),
-        )
+        return (self.path.target_from_value(value),)
 
     @property
     def orm_load(self) -> OrmLoadRequirement:
-        return OrmLoadRequirement(attributes=(self.attribute,))
+        return OrmLoadRequirement(attributes=(self.path.attribute,))
 
     @property
     def queryable(self) -> bool:
@@ -683,6 +711,18 @@ class LocalPathColumnSource:
     ) -> None:
         del refs, target_kind
         return None
+
+
+def local_path_mapping(source: LinkSource[Any]) -> LocalPathMapping | None:
+    """Return the path mapping exposed by a direct or batched link source."""
+
+    if isinstance(source, LocalPathColumnSource):
+        return source.path
+    if isinstance(source, BatchLinkSource) and isinstance(
+        source.set_binding, LocalPathSetBinding
+    ):
+        return source.set_binding.path
+    return None
 
 
 @dataclass(frozen=True, slots=True)
