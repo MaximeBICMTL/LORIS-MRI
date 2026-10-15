@@ -18,6 +18,7 @@ from loris_data_manager.backup import (
     BackupRequest,
     BackupSelection,
     create_backup,
+    plan_backup,
     required_storage_roots,
 )
 from loris_data_manager.inspection import (
@@ -29,6 +30,7 @@ from loris_data_manager.inspection import (
     parse_inspection_selection,
     plan_inspection,
 )
+from loris_data_manager.projection import parse_resource_selection
 from loris_data_manager.provider import ResourceSchema
 from loris_data_manager.providers.core import register_core_schema
 from loris_data_manager.providers.dicom import register_dicom_schema
@@ -161,11 +163,11 @@ def inspect(
 @app.command("backup")
 def backup(
     select: Annotated[
-        str,
+        list[str],
         typer.Option(
             "--select",
-            metavar="OBJECT-KIND",
-            help="Select the logical object kind to back up.",
+            metavar="OBJECT-PATH",
+            help="Select a logical object path to back up; repeat to add projections.",
         ),
     ],
     output: Annotated[
@@ -193,7 +195,7 @@ def backup(
     ] = None,
     select_all: Annotated[
         bool,
-        typer.Option("--all", help="Back up every object of the selected kind."),
+        typer.Option("--all", help="Allow backup without a narrowing anchor selector."),
     ] = False,
 ) -> None:
     """Create a verified logical-resource backup with SQL and file payloads."""
@@ -202,16 +204,23 @@ def backup(
     expressions = tuple(where or ())
     try:
         criteria = parse_where_expressions(expressions, schema=schema)
-        schema.object_kind(select)
-        if not schema.has_provider(select):
-            raise ValueError(f"No provider is registered for object kind {select!r}")
+        selections = tuple(
+            parse_resource_selection(schema, expression) for expression in select
+        )
         selection = BackupSelection(
-            kind=select,
+            selections=selections,
             criteria=criteria,
             where_expressions=expressions,
             select_all=select_all,
         )
-        storage_root_names = required_storage_roots(schema, select)
+        plan_backup(schema, selection)
+        storage_root_names = tuple(
+            dict.fromkeys(
+                name
+                for selected in selections
+                for name in required_storage_roots(schema, selected.target_kind)
+            )
+        )
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
 
@@ -226,7 +235,7 @@ def backup(
                 if configured is None or configured.value is None:
                     raise typer.BadParameter(
                         f"Missing {root.config_setting} configuration required by "
-                        f"the resource schema for {select!r}"
+                        f"the selected resource schema"
                     )
                 storage_roots[root.name] = Path(configured.value)
         request = BackupRequest(
@@ -242,7 +251,7 @@ def backup(
 
     typer.echo(
         f"Created verified backup {result.output} for {result.selected_object_count} "
-        f"{result.kind} object(s): "
+        "logical object(s): "
         f"{result.database_row_count} database row(s), {result.file_count} file(s)."
     )
     if result.blocker_count:

@@ -18,14 +18,20 @@ from pathlib import Path, PurePosixPath
 from typing import Any, TextIO, cast
 from uuid import uuid4
 
-from sqlalchemy import Column, MetaData, Table, and_, exists, inspect, select
+from sqlalchemy import Column, MetaData, Table, and_, exists, inspect, select, union_all
 from sqlalchemy.dialects import mysql
 from sqlalchemy.engine import Connection, Dialect, Engine
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
 
-from loris_data_manager.provider import ResourceModel, ResourceSchema
-from loris_data_manager.resources import LocalPathRef, LocalPathType
+from loris_data_manager.projection import (
+    ProjectionPlan,
+    ResourceQuery,
+    execute_projection,
+    plan_resource_query,
+)
+from loris_data_manager.provider import ResourceSchema
+from loris_data_manager.resources import LocalPathRef, LocalPathType, ObjectRef
 from loris_data_manager.schema import (
     BatchLinkSource,
     DatabaseRowSetBinding,
@@ -33,31 +39,21 @@ from loris_data_manager.schema import (
     LocalPathColumnSource,
     LocalPathSetBinding,
     OrmEntitySource,
-    PropertyCriterion,
     local_path_mapping,
 )
 
 BACKUP_FORMAT = "loris-resource-backup"
-BACKUP_FORMAT_VERSION = 1
+BACKUP_FORMAT_VERSION = 2
 COPY_BUFFER_SIZE = 1024 * 1024
 ROW_BATCH_SIZE = 500
 MYSQL_RESTORE_DIALECT = mysql.dialect(paramstyle="named")
 
 
 @dataclass(frozen=True, slots=True)
-class BackupSelection:
-    """One logical object kind selected for an operation."""
+class BackupSelection(ResourceQuery):
+    """Shared semantic projections plus their original CLI predicates."""
 
-    kind: str
-    criteria: tuple[PropertyCriterion, ...]
     where_expressions: tuple[str, ...] = ()
-    select_all: bool = False
-
-    def __post_init__(self) -> None:
-        if not self.kind:
-            raise ValueError("A backup selection requires an object kind")
-        if not self.select_all and not self.criteria:
-            raise ValueError("At least one selector is required unless select_all is enabled")
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,8 +71,8 @@ class BackupResult:
 
     output: Path
     operation_id: str
-    kind: str
     selected_object_count: int
+    selected_object_counts: Mapping[str, int]
     database_row_count: int
     file_count: int
     blocker_count: int
@@ -138,21 +134,17 @@ class FileCollectionBackup:
 
 @dataclass(frozen=True, slots=True)
 class BackupPlan:
-    """Kind-specific physical capture plan consumed by the generic executor."""
+    """Combined physical capture plan for explicitly selected logical objects."""
 
-    kind: str
+    kinds: tuple[str, ...]
     tables: tuple[DatabaseTableBackup, ...]
     files: tuple[FileCollectionBackup, ...] = ()
     references: tuple[DatabaseReferenceCheck, ...] = ()
 
     def __post_init__(self) -> None:
         selected_tables = sum(table.counts_selected_objects for table in self.tables)
-        if selected_tables != 1:
-            raise ValueError("A backup plan must have exactly one selected-object table")
-
-
-def _selected_object_table(plan: BackupPlan) -> DatabaseTableBackup:
-    return next(table for table in plan.tables if table.counts_selected_objects)
+        if selected_tables < 1:
+            raise ValueError("A backup plan must have at least one selected-object table")
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,21 +156,26 @@ class _PendingFile:
 
 
 def plan_backup(
-    connection: Connection,
     schema: ResourceSchema,
     selection: BackupSelection,
-) -> BackupPlan:
-    """Lower a semantic selection and its lifecycle bindings to physical queries."""
+) -> ProjectionPlan:
+    """Plan shared semantic selection for a backup without executing it."""
 
-    selected_statement = ResourceModel(schema).plan_selection(
-        selection.kind,
-        criteria=selection.criteria,
-    )
-    return _plan_backup_from_selection(
-        connection,
+    for selected in selection.selections:
+        if selected.path.property is not None:
+            raise ValueError(
+                f"Backup selection {selected.expression!r} ends at a scalar property; "
+                "select a logical object instead"
+            )
+        if not schema.has_provider(selected.target_kind):
+            raise ValueError(
+                f"Backup selection {selected.expression!r} does not end at a logical object "
+                "with a registered provider"
+            )
+    return plan_resource_query(
         schema,
-        selection.kind,
-        selected_statement,
+        selection,
+        include_default_members=False,
     )
 
 
@@ -199,6 +196,7 @@ def _plan_backup_for_identities(
         schema,
         kind,
         selected_statement,
+        inspect_dependencies=False,
     )
 
 
@@ -207,6 +205,8 @@ def _plan_backup_from_selection(
     schema: ResourceSchema,
     kind: str,
     selected_statement: Select[Any],
+    *,
+    inspect_dependencies: bool = True,
 ) -> BackupPlan:
     """Lower one anchor selection statement to its physical ownership closure."""
 
@@ -312,13 +312,17 @@ def _plan_backup_from_selection(
         ),
     )
 
-    ordered_tables, references = _inspect_database_dependencies(
-        connection,
-        tuple(tables),
-    )
+    if inspect_dependencies:
+        ordered_tables, references = _inspect_database_dependencies(
+            connection,
+            tuple(tables),
+        )
+    else:
+        ordered_tables = tuple(tables)
+        references = []
 
     return BackupPlan(
-        kind=kind,
+        kinds=(kind,),
         tables=ordered_tables,
         files=tuple(file_collections),
         references=tuple(references),
@@ -336,6 +340,20 @@ def required_storage_roots(schema: ResourceSchema, kind: str) -> tuple[str, ...]
         if (path := local_path_mapping(link.source)) is not None
     )
     return tuple(dict.fromkeys(path.storage_root for path in paths))
+
+
+def _identity_values(
+    schema: ResourceSchema,
+    kind: str,
+    refs: tuple[ObjectRef, ...],
+) -> tuple[object, ...]:
+    table = _model_table(schema.provider(kind).orm_model)
+    identity = _single_primary_key(table, kind)
+    python_type = identity.type.python_type
+    try:
+        return tuple(python_type(ref.key) for ref in refs)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"References to {kind!r} have invalid identities") from error
 
 
 def _plan_batch_table(
@@ -601,6 +619,116 @@ def _order_database_tables(
     return tuple(ordered)
 
 
+def _combine_backup_plans(
+    connection: Connection,
+    plans: tuple[BackupPlan, ...],
+) -> BackupPlan:
+    """Union per-kind ownership closures before dependency and blocker analysis."""
+
+    grouped: dict[tuple[str | None, str], list[DatabaseTableBackup]] = {}
+    for plan in plans:
+        for table_plan in plan.tables:
+            key = (table_plan.table.schema, table_plan.table.name)
+            grouped.setdefault(key, []).append(table_plan)
+
+    combined_tables = tuple(
+        _combine_table_backups(table_plans)
+        for table_plans in grouped.values()
+    )
+    ordered_tables, references = _inspect_database_dependencies(
+        connection,
+        combined_tables,
+    )
+    return BackupPlan(
+        kinds=tuple(dict.fromkeys(kind for plan in plans for kind in plan.kinds)),
+        tables=ordered_tables,
+        files=tuple(file for plan in plans for file in plan.files),
+        references=tuple(references),
+    )
+
+
+def _combine_table_backups(
+    plans: list[DatabaseTableBackup],
+) -> DatabaseTableBackup:
+    """Deduplicate one physical table reached through several logical selections."""
+
+    first = plans[0]
+    if len(plans) == 1:
+        return first
+    if any(plan.action != first.action for plan in plans[1:]):
+        raise ValueError(
+            f"Conflicting backup actions were planned for {first.table.fullname!r}"
+        )
+    ownership_keys = {_ownership_key(plan.ownership) for plan in plans}
+    if len(ownership_keys) != 1:
+        raise ValueError(
+            f"The selected logical objects reach {first.table.fullname!r} through "
+            "incompatible ownership paths"
+        )
+
+    selected_rows = union_all(
+        *(plan.statement.order_by(None) for plan in plans)
+    ).subquery(f"combined_{first.table.name}")
+    primary_key = tuple(first.table.primary_key.columns)
+    if not primary_key:
+        raise ValueError(
+            f"Cannot combine backup selections for {first.table.fullname!r} without a primary key"
+        )
+    statement = (
+        select(first.table)
+        .where(
+            exists(
+                select(1).select_from(selected_rows).where(
+                    and_(
+                        *(
+                            column
+                            == _selectable_column_named(
+                                selected_rows,
+                                first.table,
+                                column.name,
+                            )
+                            for column in primary_key
+                        )
+                    )
+                )
+            )
+        )
+        .order_by(*primary_key)
+    )
+    files_by_key: dict[tuple[object, ...], FileBackup] = {}
+    for plan in plans:
+        for file in plan.files:
+            key = (
+                file.object_kind,
+                file.object_identity.table.fullname,
+                file.object_identity.name,
+                file.storage_root,
+                file.path_attribute.table.fullname,
+                file.path_attribute.name,
+                file.path_prefix,
+            )
+            files_by_key.setdefault(key, file)
+    return DatabaseTableBackup(
+        table=first.table,
+        statement=statement,
+        action=first.action,
+        counts_selected_objects=any(plan.counts_selected_objects for plan in plans),
+        files=tuple(files_by_key.values()),
+        ownership=first.ownership,
+    )
+
+
+def _ownership_key(ownership: DatabaseOwnership | None) -> tuple[str, str, str, str] | None:
+    if ownership is None:
+        return None
+    return (
+        ownership.parent_column.table.fullname,
+        ownership.parent_column.name,
+        ownership.child_column.table.fullname,
+        ownership.child_column.name,
+    )
+
+
 def _locking_statement(statement: Select[Any], table: Table) -> Select[Any]:
     """Request write locks while returning complete rows in deterministic order."""
 
@@ -622,10 +750,17 @@ def create_backup(
     """Stream a selected resource backup into a verified, atomically finalized directory."""
 
     selection = request.selection
-    schema.object_kind(selection.kind)
-    if not schema.has_provider(selection.kind):
-        raise ValueError(f"No provider is registered for object kind {selection.kind!r}")
-    required_roots = required_storage_roots(schema, selection.kind)
+    semantic_plan = plan_backup(schema, selection)
+    selected_kinds = tuple(
+        dict.fromkeys(selected.target_kind for selected in selection.selections)
+    )
+    required_roots = tuple(
+        dict.fromkeys(
+            root
+            for kind in selected_kinds
+            for root in required_storage_roots(schema, kind)
+        )
+    )
     missing_roots = {
         name for name in required_roots if name not in request.storage_roots
     }
@@ -649,56 +784,54 @@ def create_backup(
         table_entries: list[dict[str, object]] = []
         database_row_count = 0
         selected_object_count = 0
+        selected_object_counts: dict[str, int] = {}
 
         with engine.connect() as connection:
             if engine.dialect.name == "mysql":
                 connection = connection.execution_options(isolation_level="REPEATABLE READ")
             with connection.begin():
-                semantic_plan = plan_backup(connection, schema, selection)
-                if semantic_plan.kind != selection.kind:
-                    raise ValueError(
-                        f"Resource planner for {selection.kind!r} produced kind "
-                        f"{semantic_plan.kind!r}"
-                    )
                 with Session(connection) as db:
+                    projection = execute_projection(db, semantic_plan, lock_rows=True)
+                    selected_refs = frozenset(
+                        ref
+                        for projected in projection.projected
+                        for ref in projected
+                        if isinstance(ref, ObjectRef)
+                    )
+                    if not selected_refs:
+                        raise ValueError("The backup selection projected no logical objects")
+                    refs_by_kind = {
+                        kind: tuple(
+                            sorted(
+                                (ref for ref in selected_refs if ref.kind == kind),
+                                key=str,
+                            )
+                        )
+                        for kind in sorted({ref.kind for ref in selected_refs})
+                    }
+                    selected_object_counts = {
+                        kind: len(refs) for kind, refs in refs_by_kind.items()
+                    }
+                    selected_object_count = sum(selected_object_counts.values())
+                    physical_plans = tuple(
+                        _plan_backup_for_identities(
+                            connection,
+                            schema,
+                            kind,
+                            tuple(_identity_values(schema, kind, refs)),
+                        )
+                        for kind, refs in refs_by_kind.items()
+                    )
+                    plan = _combine_backup_plans(connection, physical_plans)
+
                     with sql_path.open("w", encoding="utf-8", newline="\n") as restore_sql:
                         restore_sql.write(
-                            f"-- LORIS {selection.kind} restoration patch\n"
+                            "-- LORIS logical-resource restoration patch\n"
                             f"-- Backup operation: {operation_id}\n"
                             "-- Restore files before applying this transaction.\n\n"
                             "START TRANSACTION;\n\n"
                         )
-                        semantic_anchor = _selected_object_table(semantic_plan)
-                        selected_identities: list[object] = []
-                        entry, files = _write_database_table(
-                            db,
-                            semantic_anchor,
-                            restore_sql,
-                            lock_rows=True,
-                            selected_identities=selected_identities,
-                        )
-                        table_entries.append(entry)
-                        selected_object_count = cast(int, entry["row_count"])
-                        database_row_count += selected_object_count
-                        pending_files.extend(files)
-                        if selected_object_count == 0:
-                            raise ValueError(
-                                f"The backup selection matched no {selection.kind} objects"
-                            )
-
-                        # The semantic predicate has now been evaluated exactly once.
-                        # Every remaining query is derived from these locked identities.
-                        plan = _plan_backup_for_identities(
-                            connection,
-                            schema,
-                            selection.kind,
-                            tuple(selected_identities),
-                        )
-                        if not plan.tables[0].counts_selected_objects:
-                            raise ValueError(
-                                "The selected object table must precede its owned tables"
-                            )
-                        for table_plan in plan.tables[1:]:
+                        for table_plan in plan.tables:
                             entry, files = _write_database_table(
                                 db,
                                 table_plan,
@@ -733,18 +866,24 @@ def create_backup(
                         "created_at": datetime.now(UTC).isoformat(),
                         "planner": {
                             "name": "resource-ownership",
-                            "version": 1,
-                            "object_kind": plan.kind,
+                            "version": 2,
+                            "object_kinds": list(plan.kinds),
                             "reference_inventory": "database-foreign-keys",
                             "database_foreign_keys_checked": True,
                             "database_row_locking": "select-for-update",
-                            "selection_materialization": "locked-anchor-identities",
+                            "selection_materialization": "locked-projected-identities",
                         },
                         "selection": {
-                            "kind": selection.kind,
+                            "select": [
+                                selected.expression for selected in selection.selections
+                            ],
                             "all": selection.select_all,
                             "where": list(selection.where_expressions),
-                            "matched_count": selected_object_count,
+                            "anchor": {
+                                "kind": semantic_plan.anchor_kind,
+                                "matched_count": len(projection.matched),
+                            },
+                            "selected": selected_object_counts,
                         },
                         "database": {
                             "dialect": "mysql",
@@ -783,8 +922,8 @@ def create_backup(
     return BackupResult(
         output=output,
         operation_id=operation_id,
-        kind=selection.kind,
         selected_object_count=selected_object_count,
+        selected_object_counts=selected_object_counts,
         database_row_count=database_row_count,
         file_count=len(file_entries),
         blocker_count=blocker_count,

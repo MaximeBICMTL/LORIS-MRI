@@ -22,6 +22,57 @@ from loris_data_manager.schema import (
 
 
 @dataclass(frozen=True, slots=True)
+class ResourceSelection:
+    """One schema-resolved object or property projection."""
+
+    expression: str
+    path: ProjectionPath
+
+    @property
+    def target_kind(self) -> str:
+        return self.path.target_kind
+
+    @property
+    def property_name(self) -> str | None:
+        return None if self.path.property is None else self.path.property.property_name
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceQuery:
+    """Shared semantic selection consumed by resource operations."""
+
+    selections: tuple[ResourceSelection, ...]
+    criteria: tuple[PropertyCriterion, ...] = ()
+    select_all: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.selections:
+            raise ValueError("At least one object or property must be selected")
+        if not self.select_all and not self.criteria:
+            raise ValueError("At least one selector is required unless select_all is enabled")
+
+    @property
+    def anchor_kind(self) -> str:
+        roots = {selection.path.root_kind for selection in self.selections}
+        if len(roots) != 1:
+            raise ValueError(
+                "All --select expressions must currently share one root kind; "
+                f"got {sorted(roots)}"
+            )
+        return next(iter(roots))
+
+
+def parse_resource_selection(schema: ResourceSchema, expression: str) -> ResourceSelection:
+    """Resolve a public selection expression through the semantic schema."""
+
+    expression = expression.strip()
+    path = schema.projection_path(expression)
+    if not schema.has_provider(path.root_kind):
+        raise ValueError(f"Projection root {path.root_kind!r} has no provider")
+    return ResourceSelection(expression, path)
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectionEntityPlan:
     """One logical ORM entity returned by the primary projection statement."""
 
@@ -68,10 +119,16 @@ def plan_projection(
     paths: tuple[ProjectionPath, ...],
     *,
     criteria: tuple[PropertyCriterion, ...] = (),
+    include_default_members: bool = True,
 ) -> ProjectionPlan:
     """Plan semantic projections without opening a database session."""
 
-    entities, projection_links, links = _plan_entities(schema, anchor_kind, paths)
+    entities, projection_links, links = _plan_entities(
+        schema,
+        anchor_kind,
+        paths,
+        include_default_members=include_default_members,
+    )
     anchor = entities[0]
     statement = ResourceModel(schema).plan_selection(
         anchor_kind,
@@ -85,10 +142,29 @@ def plan_projection(
     return ProjectionPlan(schema, anchor_kind, paths, statement, entities, links)
 
 
+def plan_resource_query(
+    schema: ResourceSchema,
+    query: ResourceQuery,
+    *,
+    include_default_members: bool = True,
+) -> ProjectionPlan:
+    """Lower a shared semantic query to one projection plan."""
+
+    return plan_projection(
+        schema,
+        query.anchor_kind,
+        tuple(selection.path for selection in query.selections),
+        criteria=query.criteria,
+        include_default_members=include_default_members,
+    )
+
+
 def _plan_entities(
     schema: ResourceSchema,
     anchor_kind: str,
     paths: tuple[ProjectionPath, ...],
+    *,
+    include_default_members: bool,
 ) -> tuple[
     tuple[ProjectionEntityPlan, ...],
     tuple[LinkMember[Any], ...],
@@ -141,7 +217,7 @@ def _plan_entities(
                 property_definition = schema.property(path.property)
                 requirements[current_path] |= property_definition.orm_load
                 properties_by_path[current_path].add(property_definition.name)
-        else:
+        elif include_default_members:
             for member in schema.properties(path.target_kind):
                 if member.load_policy is LoadPolicy.DEFAULT and current_path in requirements:
                     requirements[current_path] |= member.orm_load
@@ -164,13 +240,23 @@ def _plan_entities(
     return entities, tuple(projection_links), tuple(link_plans)
 
 
-def execute_projection(db: Session, plan: ProjectionPlan) -> ProjectionResult:
+def execute_projection(
+    db: Session,
+    plan: ProjectionPlan,
+    *,
+    lock_rows: bool = False,
+) -> ProjectionResult:
     """Execute a projection plan while keeping resolved ORM objects session-bound."""
 
     schema = plan.schema
     model = ResourceModel(schema)
     graph = ResourceGraph()
-    rows = tuple(db.execute(plan.primary_statement).unique())
+    primary_statement = (
+        plan.primary_statement.with_for_update()
+        if lock_rows
+        else plan.primary_statement
+    )
+    rows = tuple(db.execute(primary_statement).unique())
     fragments: dict[tuple[str, ...], GraphFragment] = {}
     loaded_members: set[tuple[ResourceRef, MemberRef]] = set()
     for index, entity in enumerate(plan.entities):
@@ -234,6 +320,7 @@ def execute_projection(db: Session, plan: ProjectionPlan) -> ProjectionResult:
             planned,
             source_objects,
             loaded_members,
+            lock_rows=lock_rows,
             resolved_targets=joined_targets,
         )
 
@@ -304,6 +391,7 @@ def _load_link(
     source_objects: tuple[ResourceObject, ...],
     loaded_members: set[tuple[ResourceRef, MemberRef]],
     *,
+    lock_rows: bool,
     resolved_targets: list[tuple[ResourceRef, ObjectRef | PhysicalObject]] | None = None,
 ) -> None:
     link = planned.link
@@ -320,9 +408,12 @@ def _load_link(
         resolved: list[tuple[ResourceRef, ObjectRef | PhysicalObject]] = []
         for offset in range(0, len(keys), source.batch_size):
             batch = keys[offset : offset + source.batch_size]
+            statement = source.statement_for_keys(batch)
+            if lock_rows:
+                statement = statement.with_for_update()
             resolved.extend(
                 source.target_from_row(row)
-                for row in db.scalars(source.statement_for_keys(batch))
+                for row in db.scalars(statement)
             )
     else:
         resolved = [
@@ -372,4 +463,6 @@ def _load_link(
         refs=unresolved,
         orm_load=OrmLoadRequirement(whole_entity=True),
     )
+    if lock_rows:
+        statement = statement.with_for_update()
     graph.add(model.resolve_statement(db, provider, statement, link_names=frozenset()))

@@ -14,8 +14,11 @@ from sqlalchemy.orm import Session
 from loris_data_manager.graph import ResourceGraph
 from loris_data_manager.projection import (
     ProjectionPlan,
+    ResourceQuery,
+    ResourceSelection,
     execute_projection,
-    plan_projection,
+    parse_resource_selection,
+    plan_resource_query,
 )
 from loris_data_manager.provider import ResourceModel, ResourceSchema
 from loris_data_manager.providers.core import CANDIDATE, PROJECT, SESSION, SITE
@@ -32,8 +35,6 @@ from loris_data_manager.schema import (
     LinkMember,
     LoadPolicy,
     MemberRef,
-    ProjectionPath,
-    PropertyCriterion,
     PropertyReadContext,
 )
 
@@ -58,32 +59,14 @@ class FilesystemPropertyReadContext(PropertyReadContext):
         return metadata.st_size
 
 
-@dataclass(frozen=True, slots=True)
-class InspectionSelection:
-    expression: str
-    path: ProjectionPath
-
-    @property
-    def target_kind(self) -> str:
-        return self.path.target_kind
-
-    @property
-    def property_name(self) -> str | None:
-        return None if self.path.property is None else self.path.property.property_name
+InspectionSelection = ResourceSelection
 
 
 @dataclass(frozen=True, slots=True)
-class InspectionQuery:
-    selections: tuple[InspectionSelection, ...]
-    criteria: tuple[PropertyCriterion, ...] = ()
-    select_all: bool = False
+class InspectionQuery(ResourceQuery):
+    """A shared semantic query with inspection-specific presentation options."""
+
     expand_related: bool = False
-
-    def __post_init__(self) -> None:
-        if not self.selections:
-            raise ValueError("At least one object or property must be selected")
-        if not self.select_all and not self.criteria:
-            raise ValueError("At least one selector is required unless select_all is enabled")
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,12 +104,9 @@ class InspectionPlan:
 def plan_inspection(schema: ResourceSchema, query: InspectionQuery) -> InspectionPlan:
     """Plan an inspection without opening a session or executing SQL."""
 
-    anchor_kind = _anchor_kind(query)
-    projection = plan_projection(
+    projection = plan_resource_query(
         schema,
-        anchor_kind,
-        tuple(selection.path for selection in query.selections),
-        criteria=query.criteria,
+        query,
     )
     return InspectionPlan(schema, query, projection)
 
@@ -227,21 +207,7 @@ def execute_inspection_plan(
 
 
 def parse_inspection_selection(schema: ResourceSchema, expression: str) -> InspectionSelection:
-    expression = expression.strip()
-    path = schema.projection_path(expression)
-    if not schema.has_provider(path.root_kind):
-        raise ValueError(f"Projection root {path.root_kind!r} has no provider")
-    return InspectionSelection(expression, path)
-
-
-def _anchor_kind(query: InspectionQuery) -> str:
-    roots = {
-        selection.path.root_kind
-        for selection in query.selections
-    }
-    if len(roots) != 1:
-        raise ValueError(f"All --select expressions must currently share one root kind; got {sorted(roots)}")
-    return next(iter(roots))
+    return parse_resource_selection(schema, expression)
 
 
 def _expand_related(

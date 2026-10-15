@@ -6,8 +6,12 @@ from loris_data_manager.projection import (
     ProjectionLinkPlan,
     ProjectionPlan,
     ProjectionResult,
+    ResourceQuery,
+    ResourceSelection,
     execute_projection,
+    parse_resource_selection,
     plan_projection,
+    plan_resource_query,
 )
 from loris_data_manager.provider import ResourceModel, ResourceProvider, ResourceSchema
 from loris_data_manager.resources import (
@@ -115,12 +119,16 @@ __all__ = [
     "ResourceModel",
     "ResourceObject",
     "ResourceProvider",
+    "ResourceQuery",
     "ResourceRef",
     "ResourceSchema",
+    "ResourceSelection",
     "SelectionConstraint",
     "StorageRoot",
     "ValueMember",
     "execute_projection",
     "local_path_mapping",
+    "parse_resource_selection",
     "plan_projection",
+    "plan_resource_query",
 ]

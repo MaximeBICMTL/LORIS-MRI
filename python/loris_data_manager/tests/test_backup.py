@@ -3,7 +3,6 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from lib.db.models.candidate import DbCandidate
 from lib.db.models.dicom_archive import DbDicomArchive
 from lib.db.models.dicom_archive_file import DbDicomArchiveFile
 from lib.db.models.dicom_archive_series import DbDicomArchiveSeries
@@ -32,6 +31,7 @@ from loris_data_manager.backup import (
     verify_backup,
 )
 from loris_data_manager.cli import app, make_resource_schema
+from loris_data_manager.projection import parse_resource_selection
 from loris_data_manager.schema import PropertyCriterion
 
 
@@ -100,7 +100,9 @@ def _create_archive_backup(
         BackupRequest(
             output=output,
             selection=BackupSelection(
-                kind="dicom-archive",
+                selections=(
+                    parse_resource_selection(schema, "dicom-archive"),
+                ),
                 criteria=criteria,
                 where_expressions=where_expressions,
             ),
@@ -132,8 +134,8 @@ def test_dicom_backup_creates_verified_sql_manifest_and_file_artifact(
         where_expressions=(expression,),
     )
 
-    assert result.kind == "dicom-archive"
     assert result.selected_object_count == 1
+    assert result.selected_object_counts == {"dicom-archive": 1}
     assert result.database_row_count == 3
     assert result.file_count == 1
     assert result.blocker_count == 1
@@ -157,8 +159,9 @@ def test_dicom_backup_creates_verified_sql_manifest_and_file_artifact(
     manifest = verify_backup(output)
     assert manifest["selection"] == {
         "all": False,
-        "kind": "dicom-archive",
-        "matched_count": 1,
+        "anchor": {"kind": "dicom-archive", "matched_count": 1},
+        "select": ["dicom-archive"],
+        "selected": {"dicom-archive": 1},
         "where": [f"dicom-archive.id={archive_id}"],
     }
     assert manifest["prospective_removal"] == {"blocker_count": 1, "eligible": False}
@@ -274,7 +277,9 @@ def test_imaging_file_backup_captures_its_row_and_file_without_its_source_archiv
         BackupRequest(
             output=output,
             selection=BackupSelection(
-                kind="imaging-file",
+                selections=(
+                    parse_resource_selection(schema, "imaging-file"),
+                ),
                 criteria=(schema.criterion("imaging-file.id", imaging_file_id),),
             ),
             storage_roots={"imaging-data": data_root},
@@ -336,7 +341,9 @@ def test_mri_upload_backup_captures_only_its_explicitly_selected_row(
         BackupRequest(
             output=output,
             selection=BackupSelection(
-                kind="mri-upload",
+                selections=(
+                    parse_resource_selection(schema, "mri-upload"),
+                ),
                 criteria=(schema.criterion("mri-upload.id", upload_id),),
             ),
             storage_roots={},
@@ -352,6 +359,58 @@ def test_mri_upload_backup_captures_only_its_explicitly_selected_row(
     assert "INSERT INTO `tarchive` " not in restore_sql
     assert "INSERT INTO `files` " not in restore_sql
     verify_backup(output)
+
+
+def test_backup_combines_explicit_archive_and_mri_upload_projections(
+    db_engine: Engine,
+    tmp_path: Path,
+):
+    with Session(db_engine) as db:
+        archive = _add_archive(db)
+        archive_id = archive.id
+        db.commit()
+    archive_root = tmp_path / "archive-root"
+    archive_file = archive_root / "2026" / "archive.tar"
+    archive_file.parent.mkdir(parents=True)
+    archive_file.write_bytes(b"raw dicom archive")
+    schema = make_resource_schema()
+    output = tmp_path / "backup"
+
+    result = create_backup(
+        db_engine,
+        schema,
+        BackupRequest(
+            output=output,
+            selection=BackupSelection(
+                selections=(
+                    parse_resource_selection(schema, "dicom-archive"),
+                    parse_resource_selection(schema, "dicom-archive.mri-upload"),
+                ),
+                criteria=(schema.criterion("dicom-archive.id", archive_id),),
+                where_expressions=(f"dicom-archive.id={archive_id}",),
+            ),
+            storage_roots={"dicom-archive": archive_root},
+        ),
+    )
+
+    assert result.selected_object_count == 2
+    assert result.selected_object_counts == {
+        "dicom-archive": 1,
+        "mri-upload": 1,
+    }
+    assert result.database_row_count == 4
+    assert result.blocker_count == 0
+    restore_sql = (output / "restore.sql").read_text()
+    assert "INSERT INTO `tarchive` " in restore_sql
+    assert "INSERT INTO `mri_upload` " in restore_sql
+    manifest = verify_backup(output)
+    assert manifest["selection"] == {
+        "all": False,
+        "anchor": {"kind": "dicom-archive", "matched_count": 1},
+        "select": ["dicom-archive", "dicom-archive.mri-upload"],
+        "selected": {"dicom-archive": 1, "mri-upload": 1},
+        "where": [f"dicom-archive.id={archive_id}"],
+    }
 
 
 def test_backup_copies_the_target_of_an_archive_symlink(db_engine: Engine, tmp_path: Path):
@@ -386,7 +445,7 @@ def test_backup_rejects_an_empty_selection(db_engine: Engine, tmp_path: Path):
     schema = make_resource_schema()
     output = tmp_path / "backup"
 
-    with pytest.raises(ValueError, match="matched no dicom-archive objects"):
+    with pytest.raises(ValueError, match="projected no logical objects"):
         _create_archive_backup(
             db_engine,
             output,
@@ -418,17 +477,35 @@ def test_backup_cli_requires_a_selector_and_advertises_generic_selection(tmp_pat
     assert result.exit_code == 2
     assert "At least one selector is required" in result.output
 
+    scalar_result = CliRunner().invoke(
+        app,
+        (
+            "backup",
+            "--select",
+            "dicom-archive.id",
+            "--where",
+            "dicom-archive.id=53",
+            "--output",
+            str(tmp_path / "scalar-backup"),
+        ),
+    )
+    assert scalar_result.exit_code == 2
+    assert "ends at a scalar" in scalar_result.output
+    assert "select a logical object instead" in scalar_result.output
 
-def test_backup_plan_is_inferred_for_any_owned_orm_entity(db_engine: Engine):
+
+def test_backup_uses_the_shared_semantic_projection_plan():
     schema = make_resource_schema()
-    with db_engine.connect() as connection:
-        plan = plan_backup(
-            connection,
-            schema,
-            BackupSelection(kind="candidate", criteria=(), select_all=True),
-        )
+    plan = plan_backup(
+        schema,
+        BackupSelection(
+            selections=(parse_resource_selection(schema, "candidate"),),
+            select_all=True,
+        ),
+    )
 
-    assert [table.table for table in plan.tables] == [DbCandidate.__table__]
+    assert plan.anchor_kind == "candidate"
+    assert plan.paths == (schema.projection_path("candidate"),)
     assert required_storage_roots(schema, "candidate") == ()
     assert required_storage_roots(schema, "dicom-archive") == ("dicom-archive",)
     assert required_storage_roots(schema, "imaging-file") == ("imaging-data",)
@@ -475,7 +552,7 @@ def test_backup_discovers_reference_from_table_unknown_to_orm(
     assert planner["reference_inventory"] == "database-foreign-keys"
     assert planner["database_foreign_keys_checked"] is True
     assert planner["database_row_locking"] == "select-for-update"
-    assert planner["selection_materialization"] == "locked-anchor-identities"
+    assert planner["selection_materialization"] == "locked-projected-identities"
     references = cast(list[dict[str, object]], manifest["references"])
     custom = next(entry for entry in references if entry["table"] == "custom_archive_reference")
     assert custom["columns"] == ["archive_id"]
@@ -616,6 +693,8 @@ def test_backup_cli_creates_the_artifact(
             "backup",
             "--select",
             "dicom-archive",
+            "--select",
+            "dicom-archive.mri-upload",
             "--where",
             f"dicom-archive.id={archive_id}",
         ),
@@ -623,10 +702,13 @@ def test_backup_cli_creates_the_artifact(
 
     assert result.exit_code == 0
     assert "Created verified backup" in result.output
-    assert "Recorded 1 external reference" in result.output
+    assert "Recorded" not in result.output
     outputs = tuple(tmp_path.glob("loris-backup-*"))
     assert len(outputs) == 1
     output = outputs[0]
     assert (output / "manifest.json").is_file()
     manifest = verify_backup(output)
+    selection = cast(dict[str, object], manifest["selection"])
+    assert selection["select"] == ["dicom-archive", "dicom-archive.mri-upload"]
+    assert selection["selected"] == {"dicom-archive": 1, "mri-upload": 1}
     assert output.name == f"loris-backup-{manifest['operation_id']}"
