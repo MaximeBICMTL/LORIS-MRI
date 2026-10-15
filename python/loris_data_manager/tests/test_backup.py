@@ -1,6 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from lib.db.models.candidate import DbCandidate
@@ -8,7 +8,9 @@ from lib.db.models.dicom_archive import DbDicomArchive
 from lib.db.models.dicom_archive_file import DbDicomArchiveFile
 from lib.db.models.dicom_archive_series import DbDicomArchiveSeries
 from lib.db.models.mri_upload import DbMriUpload
-from sqlalchemy import Column, Engine, ForeignKey, Integer, MetaData, String, Table
+from sqlalchemy import Column, Engine, ForeignKey, Integer, MetaData, String, Table, event, select
+from sqlalchemy.dialects import mysql
+from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 from typer.testing import CliRunner
 
@@ -17,6 +19,10 @@ from loris_data_manager.backup import (
     BackupRequest,
     BackupResult,
     BackupSelection,
+    DatabaseOwnership,
+    DatabaseTableBackup,
+    _inspect_database_dependencies,  # pyright: ignore[reportPrivateUsage]
+    _locking_statement,  # pyright: ignore[reportPrivateUsage]
     create_backup,
     plan_backup,
     required_storage_roots,
@@ -299,10 +305,108 @@ def test_backup_discovers_reference_from_table_unknown_to_orm(
     planner = cast(dict[str, object], manifest["planner"])
     assert planner["reference_inventory"] == "database-foreign-keys"
     assert planner["database_foreign_keys_checked"] is True
+    assert planner["database_row_locking"] == "select-for-update"
+    assert planner["selection_materialization"] == "locked-anchor-identities"
     references = cast(list[dict[str, object]], manifest["references"])
     custom = next(entry for entry in references if entry["table"] == "custom_archive_reference")
     assert custom["columns"] == ["archive_id"]
     assert custom["row_count"] == 1
+
+
+def test_database_row_lock_uses_primary_key_order_and_for_update():
+    table = cast(Table, DbDicomArchive.__table__)
+    statement = _locking_statement(select(table), table)  # pyright: ignore[reportPrivateUsage]
+    sql = str(statement.compile(dialect=mysql.dialect()))
+
+    assert "ORDER BY tarchive.`TarchiveID`" in sql
+    assert sql.endswith(" FOR UPDATE")
+
+
+def test_owned_row_collection_requires_a_database_foreign_key(db_engine: Engine):
+    metadata = MetaData()
+    parent = Table("unprotected_parent", metadata, Column("id", Integer, primary_key=True))
+    child = Table(
+        "unprotected_child",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("parent_id", Integer, nullable=False),
+    )
+    metadata.create_all(db_engine)
+    plans = (
+        DatabaseTableBackup(
+            table=parent,
+            statement=select(parent),
+            action="delete",
+            counts_selected_objects=True,
+        ),
+        DatabaseTableBackup(
+            table=child,
+            statement=select(child),
+            action="delete",
+            ownership=DatabaseOwnership(
+                parent_column=parent.c.id,
+                child_column=child.c.parent_id,
+            ),
+        ),
+    )
+
+    with db_engine.connect() as connection:
+        with pytest.raises(ValueError, match="not protected by the expected foreign key"):
+            _inspect_database_dependencies(  # pyright: ignore[reportPrivateUsage]
+                connection,
+                plans,
+            )
+
+
+def test_backup_uses_one_explicit_database_transaction(db_engine: Engine, tmp_path: Path):
+    with Session(db_engine) as db:
+        _add_archive(db)
+        db.commit()
+    archive_root = tmp_path / "archive-root"
+    archive_file = archive_root / "2026" / "archive.tar"
+    archive_file.parent.mkdir(parents=True)
+    archive_file.write_bytes(b"raw dicom archive")
+    events: list[str] = []
+    executed_parameters: list[object] = []
+
+    def record_begin(connection: Connection) -> None:
+        del connection
+        events.append("begin")
+
+    def record_commit(connection: Connection) -> None:
+        del connection
+        events.append("commit")
+
+    def record_rollback(connection: Connection) -> None:
+        del connection
+        events.append("rollback")
+
+    def record_parameters(
+        connection: Connection,
+        cursor: Any,
+        statement: str,
+        parameters: object,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        del connection, cursor, statement, context, executemany
+        executed_parameters.append(parameters)
+
+    event.listen(db_engine, "begin", record_begin)
+    event.listen(db_engine, "commit", record_commit)
+    event.listen(db_engine, "rollback", record_rollback)
+    event.listen(db_engine, "before_cursor_execute", record_parameters)
+    schema = make_resource_schema()
+
+    _create_archive_backup(
+        db_engine,
+        tmp_path / "backup",
+        archive_root,
+        (schema.criterion("dicom-archive.patient-name", "O'Brien 100% \\ archive"),),
+    )
+
+    assert events == ["begin", "commit"]
+    assert sum("O'Brien 100%" in repr(parameters) for parameters in executed_parameters) == 1
 
 
 def test_backup_cli_creates_the_artifact(

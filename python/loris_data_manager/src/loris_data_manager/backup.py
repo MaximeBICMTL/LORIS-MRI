@@ -90,6 +90,14 @@ class FileBackup:
 
 
 @dataclass(frozen=True, slots=True)
+class DatabaseOwnership:
+    """Expected FK that protects membership in an owned row collection."""
+
+    parent_column: Column[Any]
+    child_column: Column[Any]
+
+
+@dataclass(frozen=True, slots=True)
 class DatabaseTableBackup:
     """Ordered rows restored by a backup, with optional owned files."""
 
@@ -98,6 +106,7 @@ class DatabaseTableBackup:
     action: str
     counts_selected_objects: bool = False
     files: tuple[FileBackup, ...] = ()
+    ownership: DatabaseOwnership | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +133,10 @@ class BackupPlan:
             raise ValueError("A backup plan must have exactly one selected-object table")
 
 
+def _selected_object_table(plan: BackupPlan) -> DatabaseTableBackup:
+    return next(table for table in plan.tables if table.counts_selected_objects)
+
+
 @dataclass(frozen=True, slots=True)
 class _PendingFile:
     object_kind: str
@@ -139,51 +152,87 @@ def plan_backup(
 ) -> BackupPlan:
     """Lower a semantic selection and its lifecycle bindings to physical queries."""
 
-    provider = schema.provider(selection.kind)
-    anchor_table = _model_table(provider.orm_model)
-    anchor_identity = _single_primary_key(anchor_table, selection.kind)
     selected_statement = ResourceModel(schema).plan_selection(
         selection.kind,
         criteria=selection.criteria,
     )
+    return _plan_backup_from_selection(
+        connection,
+        schema,
+        selection.kind,
+        selected_statement,
+    )
+
+
+def _plan_backup_for_identities(
+    connection: Connection,
+    schema: ResourceSchema,
+    kind: str,
+    identities: tuple[object, ...],
+) -> BackupPlan:
+    """Plan a closure from the immutable identities selected by a locking read."""
+
+    provider = schema.provider(kind)
+    anchor_table = _model_table(provider.orm_model)
+    anchor_identity = _single_primary_key(anchor_table, kind)
+    selected_statement = select(provider.orm_model).where(anchor_identity.in_(identities))
+    return _plan_backup_from_selection(
+        connection,
+        schema,
+        kind,
+        selected_statement,
+    )
+
+
+def _plan_backup_from_selection(
+    connection: Connection,
+    schema: ResourceSchema,
+    kind: str,
+    selected_statement: Select[Any],
+) -> BackupPlan:
+    """Lower one anchor selection statement to its physical ownership closure."""
+
+    provider = schema.provider(kind)
+    anchor_table = _model_table(provider.orm_model)
+    anchor_identity = _single_primary_key(anchor_table, kind)
 
     def selected_values(attribute: Any, name: str):
         attribute_model = getattr(attribute, "class_", provider.orm_model)
         if attribute_model is not provider.orm_model:
             raise ValueError(
-                f"Set source for {selection.kind}.{name} does not belong to its provider"
+                f"Set source for {kind}.{name} does not belong to its provider"
             )
         return (
             selected_statement.with_only_columns(attribute)
             .order_by(None)
             .distinct()
-            .subquery(f"selected_{selection.kind.replace('-', '_')}_{name.replace('-', '_')}")
+            .subquery(f"selected_{kind.replace('-', '_')}_{name.replace('-', '_')}")
         )
 
     selected_ids = selected_values(anchor_identity, "identities")
     tables: list[DatabaseTableBackup] = []
     anchor_files: list[FileBackup] = []
 
-    for link in schema.links(selection.kind):
+    for link in schema.links(kind):
         if link.lifecycle is LifecycleSemantics.OWNS:
             if isinstance(link.source, OrmEntitySource):
                 if link.target_kind != "database-row":
-                    raise ValueError(f"Owned entity link {selection.kind}.{link.name} is not a database row")
+                    raise ValueError(f"Owned entity link {kind}.{link.name} is not a database row")
                 continue
             if isinstance(link.source, LocalPathColumnSource):
                 schema.storage_root(link.source.storage_root)
                 if link.source.expected_type is not LocalPathType.FILE:
                     raise ValueError(
-                        f"Owned path {selection.kind}.{link.name} is not a regular file"
+                        f"Owned path {kind}.{link.name} is not a regular file"
                     )
                 path_column = _mapped_column(link.source.attribute)
                 if link.source.attribute.class_ is not provider.orm_model:
                     raise ValueError(
-                        f"Path source for {selection.kind}.{link.name} does not belong to its provider"
+                        f"Path source for {kind}.{link.name} does not belong to its provider"
                     )
                 anchor_files.append(
                     FileBackup(
-                        object_kind=selection.kind,
+                        object_kind=kind,
                         object_identity=anchor_identity,
                         storage_root=link.source.storage_root,
                         path_attribute=path_column,
@@ -194,7 +243,7 @@ def plan_backup(
                 tables.append(
                     _plan_batch_table(
                         selected_values,
-                        selection.kind,
+                        kind,
                         link.name,
                         link.source,
                         action="delete",
@@ -202,7 +251,7 @@ def plan_backup(
                 )
                 continue
             raise ValueError(
-                f"Owned link {selection.kind}.{link.name} has no set-oriented resource source"
+                f"Owned link {kind}.{link.name} has no set-oriented resource source"
             )
 
     anchor_statement = (
@@ -227,7 +276,7 @@ def plan_backup(
     )
 
     return BackupPlan(
-        kind=selection.kind,
+        kind=kind,
         tables=ordered_tables,
         references=tuple(references),
     )
@@ -262,6 +311,7 @@ def _plan_batch_table(
     values = selected_values(source_attribute, member_name)
     table = _model_table(target_attribute.class_)
     target_column = _mapped_column(target_attribute)
+    source_column = _mapped_column(source_attribute)
     return DatabaseTableBackup(
         table=table,
         statement=(
@@ -270,6 +320,10 @@ def _plan_batch_table(
             .order_by(*table.primary_key.columns)
         ),
         action=action,
+        ownership=DatabaseOwnership(
+            parent_column=source_column,
+            child_column=target_column,
+        ),
     )
 
 
@@ -312,6 +366,14 @@ def _inspect_database_dependencies(
     if len(by_table) != len(plans):
         raise ValueError("An ownership closure reaches the same database table more than once")
     dependencies: set[tuple[tuple[str | None, str], tuple[str | None, str]]] = set()
+    reflected_foreign_keys: set[
+        tuple[
+            tuple[str | None, str],
+            tuple[str, ...],
+            tuple[str | None, str],
+            tuple[str, ...],
+        ]
+    ] = set()
     references: list[DatabaseReferenceCheck] = []
     metadata = MetaData()
 
@@ -332,6 +394,9 @@ def _inspect_database_dependencies(
             if len(constrained_names) != len(referred_names):
                 raise ValueError(f"Foreign key on {source_name!r} has mismatched columns")
             target_key = key(foreign_key.get("referred_schema"), referred_table)
+            reflected_foreign_keys.add(
+                (source_key, constrained_names, target_key, referred_names)
+            )
             target_plan = by_table.get(target_key)
             if target_plan is None:
                 continue
@@ -399,6 +464,24 @@ def _inspect_database_dependencies(
                 )
             )
 
+    for plan in plans:
+        ownership = plan.ownership
+        if ownership is None:
+            continue
+        expected = (
+            key(plan.table.schema, plan.table.name),
+            (ownership.child_column.name,),
+            key(ownership.parent_column.table.schema, ownership.parent_column.table.name),
+            (ownership.parent_column.name,),
+        )
+        if expected not in reflected_foreign_keys:
+            raise ValueError(
+                f"Owned database rows in {plan.table.fullname!r} are not protected by "
+                f"the expected foreign key {ownership.child_column.name!r} -> "
+                f"{ownership.parent_column.table.fullname}."
+                f"{ownership.parent_column.name}"
+            )
+
     return _order_database_tables(plans, by_table, dependencies), references
 
 
@@ -448,6 +531,19 @@ def _order_database_tables(
     return tuple(ordered)
 
 
+def _locking_statement(statement: Select[Any], table: Table) -> Select[Any]:
+    """Request write locks while returning complete rows in deterministic order."""
+
+    primary_key = tuple(table.primary_key.columns)
+    if not primary_key:
+        raise ValueError(f"Cannot lock database table {table.fullname!r} without a primary key")
+    return (
+        statement.order_by(None)
+        .order_by(*primary_key)
+        .with_for_update()
+    )
+
+
 def create_backup(
     engine: Engine,
     schema: ResourceSchema,
@@ -475,6 +571,7 @@ def create_backup(
         raise ValueError(f"Backup destination already exists: {output}")
     output.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
+    finalized = False
 
     try:
         sql_path = staging / "restore.sql"
@@ -483,90 +580,132 @@ def create_backup(
         database_row_count = 0
         selected_object_count = 0
 
-        connection = engine.connect()
-        try:
+        with engine.connect() as connection:
             if engine.dialect.name == "mysql":
                 connection = connection.execution_options(isolation_level="REPEATABLE READ")
-            plan = plan_backup(connection, schema, selection)
-            if plan.kind != selection.kind:
-                raise ValueError(
-                    f"Resource planner for {selection.kind!r} produced kind {plan.kind!r}"
-                )
-            with Session(connection) as db:
-                with sql_path.open("w", encoding="utf-8", newline="\n") as restore_sql:
-                    restore_sql.write(
-                        f"-- LORIS {selection.kind} restoration patch\n"
-                        f"-- Backup operation: {operation_id}\n"
-                        "-- Restore files before applying this transaction.\n\n"
-                        "START TRANSACTION;\n\n"
+            with connection.begin():
+                semantic_plan = plan_backup(connection, schema, selection)
+                if semantic_plan.kind != selection.kind:
+                    raise ValueError(
+                        f"Resource planner for {selection.kind!r} produced kind "
+                        f"{semantic_plan.kind!r}"
                     )
-                    for table_plan in plan.tables:
-                        entry, files = _write_database_table(db, table_plan, restore_sql)
+                with Session(connection) as db:
+                    with sql_path.open("w", encoding="utf-8", newline="\n") as restore_sql:
+                        restore_sql.write(
+                            f"-- LORIS {selection.kind} restoration patch\n"
+                            f"-- Backup operation: {operation_id}\n"
+                            "-- Restore files before applying this transaction.\n\n"
+                            "START TRANSACTION;\n\n"
+                        )
+                        semantic_anchor = _selected_object_table(semantic_plan)
+                        selected_identities: list[object] = []
+                        entry, files = _write_database_table(
+                            db,
+                            semantic_anchor,
+                            restore_sql,
+                            lock_rows=True,
+                            selected_identities=selected_identities,
+                        )
                         table_entries.append(entry)
-                        row_count = cast(int, entry["row_count"])
-                        database_row_count += row_count
-                        if table_plan.counts_selected_objects:
-                            selected_object_count = row_count
+                        selected_object_count = cast(int, entry["row_count"])
+                        database_row_count += selected_object_count
                         pending_files.extend(files)
-                    restore_sql.write("COMMIT;\n")
-                    restore_sql.flush()
-                    os.fsync(restore_sql.fileno())
+                        if selected_object_count == 0:
+                            raise ValueError(
+                                f"The backup selection matched no {selection.kind} objects"
+                            )
 
-                reference_entries = tuple(
-                    _describe_references(db, reference) for reference in plan.references
-                )
-        finally:
-            connection.close()
+                        # The semantic predicate has now been evaluated exactly once.
+                        # Every remaining query is derived from these locked identities.
+                        plan = _plan_backup_for_identities(
+                            connection,
+                            schema,
+                            selection.kind,
+                            tuple(selected_identities),
+                        )
+                        if not plan.tables[0].counts_selected_objects:
+                            raise ValueError(
+                                "The selected object table must precede its owned tables"
+                            )
+                        for table_plan in plan.tables[1:]:
+                            entry, files = _write_database_table(
+                                db,
+                                table_plan,
+                                restore_sql,
+                                lock_rows=True,
+                            )
+                            table_entries.append(entry)
+                            row_count = cast(int, entry["row_count"])
+                            database_row_count += row_count
+                            pending_files.extend(files)
+                        restore_sql.write("COMMIT;\n")
+                        restore_sql.flush()
+                        os.fsync(restore_sql.fileno())
 
-        if selected_object_count == 0:
-            raise ValueError(f"The backup selection matched no {selection.kind} objects")
+                    reference_entries = tuple(
+                        _describe_references(db, reference) for reference in plan.references
+                    )
 
-        # The consistent database snapshot is deliberately closed before large file copies.
-        file_entries = _copy_files(request.storage_roots, staging, pending_files)
-        blocker_count = sum(cast(int, entry["row_count"]) for entry in reference_entries)
-        manifest: dict[str, object] = {
-            "format": BACKUP_FORMAT,
-            "format_version": BACKUP_FORMAT_VERSION,
-            "operation_id": operation_id,
-            "created_at": datetime.now(UTC).isoformat(),
-            "planner": {
-                "name": "resource-ownership",
-                "version": 1,
-                "object_kind": plan.kind,
-                "reference_inventory": "database-foreign-keys",
-                "database_foreign_keys_checked": True,
-            },
-            "selection": {
-                "kind": selection.kind,
-                "all": selection.select_all,
-                "where": list(selection.where_expressions),
-                "matched_count": selected_object_count,
-            },
-            "database": {
-                "dialect": "mysql",
-                "restore_patch": "restore.sql",
-                "restore_patch_sha256": _hash_file(sql_path),
-                "row_count": database_row_count,
-                "tables": table_entries,
-            },
-            "files": file_entries,
-            "references": list(reference_entries),
-            "prospective_removal": {
-                "eligible": blocker_count == 0,
-                "blocker_count": blocker_count,
-            },
-        }
-        manifest_path = staging / "manifest.json"
-        with manifest_path.open("w", encoding="utf-8", newline="\n") as manifest_file:
-            json.dump(manifest, manifest_file, indent=2, sort_keys=True)
-            manifest_file.write("\n")
-            manifest_file.flush()
-            os.fsync(manifest_file.fileno())
+                    # Keep database locks until every backup payload is written and
+                    # verified. A future delete can run immediately after this point
+                    # in the same transaction without a row-level time-of-check gap.
+                    file_entries = _copy_files(request.storage_roots, staging, pending_files)
+                    blocker_count = sum(
+                        cast(int, entry["row_count"]) for entry in reference_entries
+                    )
+                    manifest: dict[str, object] = {
+                        "format": BACKUP_FORMAT,
+                        "format_version": BACKUP_FORMAT_VERSION,
+                        "operation_id": operation_id,
+                        "created_at": datetime.now(UTC).isoformat(),
+                        "planner": {
+                            "name": "resource-ownership",
+                            "version": 1,
+                            "object_kind": plan.kind,
+                            "reference_inventory": "database-foreign-keys",
+                            "database_foreign_keys_checked": True,
+                            "database_row_locking": "select-for-update",
+                            "selection_materialization": "locked-anchor-identities",
+                        },
+                        "selection": {
+                            "kind": selection.kind,
+                            "all": selection.select_all,
+                            "where": list(selection.where_expressions),
+                            "matched_count": selected_object_count,
+                        },
+                        "database": {
+                            "dialect": "mysql",
+                            "restore_patch": "restore.sql",
+                            "restore_patch_sha256": _hash_file(sql_path),
+                            "row_count": database_row_count,
+                            "tables": table_entries,
+                        },
+                        "files": file_entries,
+                        "references": list(reference_entries),
+                        "prospective_removal": {
+                            "eligible": blocker_count == 0,
+                            "blocker_count": blocker_count,
+                        },
+                    }
+                    manifest_path = staging / "manifest.json"
+                    with manifest_path.open(
+                        "w", encoding="utf-8", newline="\n"
+                    ) as manifest_file:
+                        json.dump(manifest, manifest_file, indent=2, sort_keys=True)
+                        manifest_file.write("\n")
+                        manifest_file.flush()
+                        os.fsync(manifest_file.fileno())
 
-        verify_backup(staging)
-        os.replace(staging, output)
+                    verify_backup(staging)
+                    # Make the verified artifact visible before releasing database
+                    # locks. If a later deletion or commit fails, retaining this
+                    # valid backup is safe even though no removal took place.
+                    os.replace(staging, output)
+                    finalized = True
     except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
+        if not finalized:
+            shutil.rmtree(staging, ignore_errors=True)
         raise
 
     return BackupResult(
@@ -628,17 +767,28 @@ def _write_database_table(
     db: Session,
     plan: DatabaseTableBackup,
     restore_sql: TextIO,
+    *,
+    lock_rows: bool = False,
+    selected_identities: list[object] | None = None,
 ) -> tuple[dict[str, object], list[_PendingFile]]:
     digest = hashlib.sha256()
     row_count = 0
     pending_files: list[_PendingFile] = []
     restore_sql.write(f"-- {plan.table.fullname}\n")
-    result = db.execute(plan.statement.execution_options(yield_per=ROW_BATCH_SIZE)).mappings()
+    statement = _locking_statement(plan.statement, plan.table) if lock_rows else plan.statement
+    result = db.execute(statement.execution_options(yield_per=ROW_BATCH_SIZE)).mappings()
+    primary_key = tuple(plan.table.primary_key.columns)
     for row in result:
         values = {column.key: row[column.key] for column in plan.table.columns}
         _update_row_digest(digest, plan.table, values)
         restore_sql.write(f"{_render_insert(plan.table, values)};\n")
         row_count += 1
+        if selected_identities is not None:
+            if len(primary_key) != 1:
+                raise ValueError(
+                    f"Selected object table {plan.table.fullname!r} has a composite identity"
+                )
+            selected_identities.append(values[primary_key[0].key])
         for file_plan in plan.files:
             raw_path = values[file_plan.path_attribute.key]
             if raw_path is not None:
@@ -669,7 +819,9 @@ def _describe_references(
 ) -> dict[str, object]:
     digest = hashlib.sha256()
     row_count = 0
-    result = db.execute(plan.statement.execution_options(yield_per=ROW_BATCH_SIZE)).mappings()
+    result = db.execute(
+        plan.statement.with_for_update().execution_options(yield_per=ROW_BATCH_SIZE)
+    ).mappings()
     for row in result:
         values = {column.key: row[column.key] for column in plan.table.columns}
         _update_row_digest(digest, plan.table, values)
