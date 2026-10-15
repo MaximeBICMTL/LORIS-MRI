@@ -56,7 +56,6 @@ from loris_data_manager.schema import (
     RelationshipSemantics,
     SelectionConstraint,
     StorageRoot,
-    UnmodeledDatabaseReference,
     ValueMember,
 )
 
@@ -113,7 +112,6 @@ __all__ = [
     "ResourceSchema",
     "SelectionConstraint",
     "StorageRoot",
-    "UnmodeledDatabaseReference",
     "ValueMember",
     "execute_projection",
     "plan_projection",

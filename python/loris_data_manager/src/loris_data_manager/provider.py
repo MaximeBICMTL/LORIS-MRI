@@ -28,7 +28,6 @@ from loris_data_manager.schema import (
     PropertyRef,
     RelationshipSemantics,
     StorageRoot,
-    UnmodeledDatabaseReference,
     ValueMember,
 )
 
@@ -73,7 +72,6 @@ class ResourceSchema:
         self._object_kinds: dict[str, ObjectKind] = {}
         self._providers: dict[str, ResourceProvider[Any]] = {}
         self._storage_roots: dict[str, StorageRoot] = {}
-        self._unmodeled_database_references: list[UnmodeledDatabaseReference] = []
 
     @property
     def object_kinds(self) -> tuple[ObjectKind, ...]:
@@ -134,17 +132,6 @@ class ResourceSchema:
             return self._storage_roots[name]
         except KeyError as error:
             raise ValueError(f"Unknown storage root {name!r}") from error
-
-    @property
-    def unmodeled_database_references(self) -> tuple[UnmodeledDatabaseReference, ...]:
-        return tuple(self._unmodeled_database_references)
-
-    def register_unmodeled_database_reference(
-        self,
-        reference: UnmodeledDatabaseReference,
-    ) -> None:
-        self.object_kind(reference.source_kind)
-        self._unmodeled_database_references.append(reference)
 
     def register_member(self, kind: str, member: ValueMember[Any, Any, Any] | LinkMember[Any]) -> None:
         definition = self.object_kind(kind)

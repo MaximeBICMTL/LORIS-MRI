@@ -8,7 +8,7 @@ from lib.db.models.dicom_archive import DbDicomArchive
 from lib.db.models.dicom_archive_file import DbDicomArchiveFile
 from lib.db.models.dicom_archive_series import DbDicomArchiveSeries
 from lib.db.models.mri_upload import DbMriUpload
-from sqlalchemy import Engine
+from sqlalchemy import Column, Engine, ForeignKey, Integer, MetaData, String, Table
 from sqlalchemy.orm import Session
 from typer.testing import CliRunner
 
@@ -246,16 +246,63 @@ def test_backup_cli_requires_a_selector_and_advertises_generic_selection(tmp_pat
     assert "At least one selector is required" in result.output
 
 
-def test_backup_plan_is_inferred_for_any_owned_orm_entity():
+def test_backup_plan_is_inferred_for_any_owned_orm_entity(db_engine: Engine):
     schema = make_resource_schema()
-    plan = plan_backup(
-        schema,
-        BackupSelection(kind="candidate", criteria=(), select_all=True),
-    )
+    with db_engine.connect() as connection:
+        plan = plan_backup(
+            connection,
+            schema,
+            BackupSelection(kind="candidate", criteria=(), select_all=True),
+        )
 
     assert [table.table for table in plan.tables] == [DbCandidate.__table__]
     assert required_storage_roots(schema, "candidate") == ()
     assert required_storage_roots(schema, "dicom-archive") == ("dicom-archive",)
+
+
+def test_backup_discovers_reference_from_table_unknown_to_orm(
+    db_engine: Engine,
+    tmp_path: Path,
+):
+    custom_metadata = MetaData()
+    Table("tarchive", custom_metadata, autoload_with=db_engine)
+    custom_reference = Table(
+        "custom_archive_reference",
+        custom_metadata,
+        Column("id", Integer, primary_key=True),
+        Column("archive_id", Integer, ForeignKey("tarchive.TarchiveID"), nullable=False),
+        Column("note", String, nullable=False),
+    )
+    custom_metadata.create_all(db_engine)
+    with Session(db_engine) as db:
+        archive = _add_archive(db)
+        archive_id = archive.id
+        db.execute(custom_reference.insert().values(archive_id=archive_id, note="custom"))
+        db.commit()
+
+    archive_root = tmp_path / "archive-root"
+    archive_file = archive_root / "2026" / "archive.tar"
+    archive_file.parent.mkdir(parents=True)
+    archive_file.write_bytes(b"raw dicom archive")
+    output = tmp_path / "backup"
+    schema = make_resource_schema()
+
+    result = _create_archive_backup(
+        db_engine,
+        output,
+        archive_root,
+        (schema.criterion("dicom-archive.id", archive_id),),
+    )
+
+    assert result.blocker_count == 2
+    manifest = verify_backup(output)
+    planner = cast(dict[str, object], manifest["planner"])
+    assert planner["reference_inventory"] == "database-foreign-keys"
+    assert planner["database_foreign_keys_checked"] is True
+    references = cast(list[dict[str, object]], manifest["references"])
+    custom = next(entry for entry in references if entry["table"] == "custom_archive_reference")
+    assert custom["columns"] == ["archive_id"]
+    assert custom["row_count"] == 1
 
 
 def test_backup_cli_creates_the_artifact(

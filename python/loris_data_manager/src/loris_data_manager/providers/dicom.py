@@ -5,10 +5,7 @@ from dataclasses import dataclass
 from lib.db.models.dicom_archive import DbDicomArchive
 from lib.db.models.dicom_archive_file import DbDicomArchiveFile
 from lib.db.models.dicom_archive_series import DbDicomArchiveSeries
-from lib.db.models.file import DbFile
-from lib.db.models.mri_protocol_violated_scan import DbMriProtocolViolatedScan
 from lib.db.models.mri_upload import DbMriUpload
-from lib.db.models.mri_violation_log import DbMriViolationLog
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -33,7 +30,6 @@ from loris_data_manager.schema import (
     OrmEntitySource,
     PropertyQuery,
     StorageRoot,
-    UnmodeledDatabaseReference,
     ValueMember,
 )
 
@@ -228,15 +224,3 @@ def register_dicom_schema(schema: ResourceSchema) -> None:
     schema.register_object_kind(LOCAL_PATH)
     schema.register_object_kind(DICOM_ARCHIVE)
     schema.register_provider(DicomArchiveProvider())
-    for reference_attribute in (
-        DbFile.dicom_archive_id,
-        DbMriProtocolViolatedScan.dicom_archive_id,
-        DbMriViolationLog.dicom_archive_id,
-    ):
-        schema.register_unmodeled_database_reference(
-            UnmodeledDatabaseReference(
-                source_kind=DICOM_ARCHIVE_KIND,
-                source_attribute=DbDicomArchive.id,
-                reference_attribute=reference_attribute,
-            )
-        )

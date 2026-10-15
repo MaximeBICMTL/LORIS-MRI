@@ -18,9 +18,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any, TextIO, cast
 from uuid import uuid4
 
-from sqlalchemy import Column, Table, select
+from sqlalchemy import Column, MetaData, Table, and_, exists, inspect, select
 from sqlalchemy.dialects import mysql
-from sqlalchemy.engine import Dialect, Engine
+from sqlalchemy.engine import Connection, Dialect, Engine
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
 
@@ -106,7 +106,7 @@ class DatabaseReferenceCheck:
 
     table: Table
     statement: Select[Any]
-    reference_column: Column[Any]
+    reference_columns: tuple[Column[Any], ...]
     action: str
 
 
@@ -132,7 +132,11 @@ class _PendingFile:
     relative_path: PurePosixPath
 
 
-def plan_backup(schema: ResourceSchema, selection: BackupSelection) -> BackupPlan:
+def plan_backup(
+    connection: Connection,
+    schema: ResourceSchema,
+    selection: BackupSelection,
+) -> BackupPlan:
     """Lower a semantic selection and its lifecycle bindings to physical queries."""
 
     provider = schema.provider(selection.kind)
@@ -158,7 +162,6 @@ def plan_backup(schema: ResourceSchema, selection: BackupSelection) -> BackupPla
 
     selected_ids = selected_values(anchor_identity, "identities")
     tables: list[DatabaseTableBackup] = []
-    references: list[DatabaseReferenceCheck] = []
     anchor_files: list[FileBackup] = []
 
     for link in schema.links(selection.kind):
@@ -202,32 +205,6 @@ def plan_backup(schema: ResourceSchema, selection: BackupSelection) -> BackupPla
                 f"Owned link {selection.kind}.{link.name} has no set-oriented resource source"
             )
 
-        if (
-            link.lifecycle is LifecycleSemantics.REFERENCES
-            and link.target_kind == "database-row"
-        ):
-            if not isinstance(link.source, BatchLinkSource):
-                raise ValueError(
-                    f"Database reference {selection.kind}.{link.name} has no set-oriented source"
-                )
-            table_plan = _plan_batch_table(
-                selected_values,
-                selection.kind,
-                link.name,
-                link.source,
-                action="block",
-            )
-            target_attribute = link.source.set_target_attribute
-            assert target_attribute is not None
-            references.append(
-                DatabaseReferenceCheck(
-                    table=table_plan.table,
-                    statement=table_plan.statement,
-                    reference_column=_mapped_column(target_attribute),
-                    action="block",
-                )
-            )
-
     anchor_statement = (
         select(anchor_table)
         .join(selected_ids, anchor_identity == next(iter(selected_ids.c)))
@@ -244,28 +221,14 @@ def plan_backup(schema: ResourceSchema, selection: BackupSelection) -> BackupPla
         ),
     )
 
-    for supplement in schema.unmodeled_database_references:
-        if supplement.source_kind != selection.kind:
-            continue
-        source_values = selected_values(supplement.source_attribute, "legacy-references")
-        reference_column = _mapped_column(supplement.reference_attribute)
-        table = _model_table(supplement.reference_attribute.class_)
-        references.append(
-            DatabaseReferenceCheck(
-                table=table,
-                statement=(
-                    select(table)
-                    .join(source_values, reference_column == next(iter(source_values.c)))
-                    .order_by(*table.primary_key.columns)
-                ),
-                reference_column=reference_column,
-                action="block",
-            )
-        )
+    ordered_tables, references = _inspect_database_dependencies(
+        connection,
+        tuple(tables),
+    )
 
     return BackupPlan(
         kind=selection.kind,
-        tables=_order_database_tables(tuple(tables)),
+        tables=ordered_tables,
         references=tuple(references),
     )
 
@@ -333,14 +296,137 @@ def _single_primary_key(table: Table, kind: str) -> Column[Any]:
     return columns[0]
 
 
-def _order_database_tables(
+def _inspect_database_dependencies(
+    connection: Connection,
     plans: tuple[DatabaseTableBackup, ...],
-) -> tuple[DatabaseTableBackup, ...]:
-    """Put parent tables before captured children using declared foreign keys."""
+) -> tuple[tuple[DatabaseTableBackup, ...], list[DatabaseReferenceCheck]]:
+    """Reflect authoritative FKs and separate internal dependencies from blockers."""
 
-    by_table = {plan.table: plan for plan in plans}
+    inspector = inspect(connection)
+    default_schema = inspector.default_schema_name
+
+    def key(schema: str | None, table: str) -> tuple[str | None, str]:
+        return (schema or default_schema, table)
+
+    by_table = {key(plan.table.schema, plan.table.name): plan for plan in plans}
     if len(by_table) != len(plans):
         raise ValueError("An ownership closure reaches the same database table more than once")
+    dependencies: set[tuple[tuple[str | None, str], tuple[str | None, str]]] = set()
+    references: list[DatabaseReferenceCheck] = []
+    metadata = MetaData()
+
+    # Deliberately inspect the connected database rather than ORM metadata. Custom
+    # deployment tables are part of the safety inventory even when Python has no model.
+    source_schema: str | None = None
+    for source_name in inspector.get_table_names(schema=source_schema):
+        source_key = key(source_schema, source_name)
+        reflected_source: Table | None = None
+        for foreign_key in inspector.get_foreign_keys(source_name, schema=source_schema):
+            referred_table = foreign_key.get("referred_table")
+            constrained_names = tuple(foreign_key.get("constrained_columns") or ())
+            referred_names = tuple(foreign_key.get("referred_columns") or ())
+            if not referred_table or not constrained_names:
+                raise ValueError(
+                    f"Cannot completely inspect foreign keys for {source_name!r}"
+                )
+            if len(constrained_names) != len(referred_names):
+                raise ValueError(f"Foreign key on {source_name!r} has mismatched columns")
+            target_key = key(foreign_key.get("referred_schema"), referred_table)
+            target_plan = by_table.get(target_key)
+            if target_plan is None:
+                continue
+            if source_key in by_table:
+                dependencies.add((source_key, target_key))
+
+            if reflected_source is None:
+                reflected_source = Table(
+                    source_name,
+                    metadata,
+                    schema=source_schema,
+                    autoload_with=connection,
+                )
+            target_rows = target_plan.statement.order_by(None).subquery(
+                f"selected_{target_plan.table.name}"
+            )
+            source_columns = tuple(
+                _column_named(reflected_source, name) for name in constrained_names
+            )
+            target_columns = tuple(
+                _selectable_column_named(target_rows, target_plan.table, name)
+                for name in referred_names
+            )
+            statement = select(reflected_source).join(
+                target_rows,
+                and_(
+                    *(source == target for source, target in zip(source_columns, target_columns))
+                ),
+            )
+
+            source_plan = by_table.get(source_key)
+            if source_plan is not None:
+                primary_key = tuple(reflected_source.primary_key.columns)
+                if not primary_key:
+                    raise ValueError(
+                        f"Owned database table {reflected_source.fullname!r} has no primary key"
+                    )
+                selected_source = source_plan.statement.order_by(None).subquery(
+                    f"selected_{source_plan.table.name}_sources"
+                )
+                statement = statement.where(
+                    ~exists(
+                        select(1).select_from(selected_source).where(
+                            and_(
+                                *(
+                                    column
+                                    == _selectable_column_named(
+                                        selected_source,
+                                        source_plan.table,
+                                        column.name,
+                                    )
+                                    for column in primary_key
+                                )
+                            )
+                        )
+                    )
+                )
+            statement = statement.order_by(*reflected_source.primary_key.columns)
+            references.append(
+                DatabaseReferenceCheck(
+                    table=reflected_source,
+                    statement=statement,
+                    reference_columns=source_columns,
+                    action="block",
+                )
+            )
+
+    return _order_database_tables(plans, by_table, dependencies), references
+
+
+def _column_named(table: Table, name: str) -> Column[Any]:
+    for column in table.columns:
+        if column.name == name:
+            return column
+    raise ValueError(f"Reflected table {table.fullname!r} has no column {name!r}")
+
+
+def _selectable_column_named(selectable: Any, table: Table, name: str) -> Any:
+    source_column = _column_named(table, name)
+    try:
+        return selectable.c[source_column.key]
+    except KeyError as error:
+        raise ValueError(
+            f"Selection for {table.fullname!r} does not contain column {name!r}"
+        ) from error
+
+
+def _order_database_tables(
+    plans: tuple[DatabaseTableBackup, ...],
+    by_table: Mapping[tuple[str | None, str], DatabaseTableBackup],
+    dependencies: set[tuple[tuple[str | None, str], tuple[str | None, str]]],
+) -> tuple[DatabaseTableBackup, ...]:
+    """Put referenced parent tables before captured children."""
+
+    plan_keys = {id(plan): table_key for table_key, plan in by_table.items()}
     ordered: list[DatabaseTableBackup] = []
     remaining = list(plans)
     while remaining:
@@ -348,9 +434,9 @@ def _order_database_tables(
             plan
             for plan in remaining
             if all(
-                foreign_key.column.table not in by_table
-                or foreign_key.column.table in {item.table for item in ordered}
-                for foreign_key in plan.table.foreign_keys
+                parent in {plan_keys[id(item)] for item in ordered}
+                for child, parent in dependencies
+                if child == plan_keys[id(plan)] and child != parent
             )
         ]
         if not ready:
@@ -379,12 +465,6 @@ def create_backup(
     }
     if missing_roots:
         raise ValueError(f"Missing storage roots required by resource schema: {sorted(missing_roots)}")
-    plan = plan_backup(schema, selection)
-    if plan.kind != selection.kind:
-        raise ValueError(
-            f"Resource planner for {selection.kind!r} produced kind {plan.kind!r}"
-        )
-
     operation_id = str(uuid4())
     output = (
         request.output
@@ -407,6 +487,11 @@ def create_backup(
         try:
             if engine.dialect.name == "mysql":
                 connection = connection.execution_options(isolation_level="REPEATABLE READ")
+            plan = plan_backup(connection, schema, selection)
+            if plan.kind != selection.kind:
+                raise ValueError(
+                    f"Resource planner for {selection.kind!r} produced kind {plan.kind!r}"
+                )
             with Session(connection) as db:
                 with sql_path.open("w", encoding="utf-8", newline="\n") as restore_sql:
                     restore_sql.write(
@@ -448,8 +533,8 @@ def create_backup(
                 "name": "resource-ownership",
                 "version": 1,
                 "object_kind": plan.kind,
-                "reference_inventory": "schema-with-legacy-supplements",
-                "unknown_database_references_checked": False,
+                "reference_inventory": "database-foreign-keys",
+                "database_foreign_keys_checked": True,
             },
             "selection": {
                 "kind": selection.kind,
@@ -591,7 +676,7 @@ def _describe_references(
         row_count += 1
     return {
         "table": plan.table.fullname,
-        "column": plan.reference_column.name,
+        "columns": [column.name for column in plan.reference_columns],
         "action": plan.action,
         "row_count": row_count,
         "content_sha256": digest.hexdigest(),

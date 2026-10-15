@@ -373,15 +373,6 @@ class StorageRoot:
     config_setting: str
 
 
-@dataclass(frozen=True, slots=True)
-class UnmodeledDatabaseReference:
-    """Temporary physical reference not yet represented by an object link."""
-
-    source_kind: str
-    source_attribute: InstrumentedAttribute[Any]
-    reference_attribute: InstrumentedAttribute[Any]
-
-
 class RelationshipSemantics(StrEnum):
     """Broad lifecycle meaning of a relationship.
 
