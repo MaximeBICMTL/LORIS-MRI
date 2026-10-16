@@ -36,6 +36,7 @@ from loris_data_manager.providers.core import register_core_schema
 from loris_data_manager.providers.dicom import register_dicom_schema
 from loris_data_manager.providers.imaging import register_imaging_schema
 from loris_data_manager.providers.mri_upload import register_mri_upload_schema
+from loris_data_manager.providers.mri_violation import register_mri_violation_schema
 from loris_data_manager.schema import (
     PropertyCriterion,
     local_path_mapping,
@@ -62,6 +63,7 @@ def make_resource_schema() -> ResourceSchema:
     register_dicom_schema(schema)
     register_imaging_schema(schema)
     register_mri_upload_schema(schema)
+    register_mri_violation_schema(schema)
     return schema
 
 

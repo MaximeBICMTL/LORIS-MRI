@@ -12,6 +12,7 @@ from lib.db.models.dicom_archive_series import DbDicomArchiveSeries
 from lib.db.models.file import DbFile
 from lib.db.models.file_parameter import DbFileParameter
 from lib.db.models.mri_upload import DbMriUpload
+from lib.db.models.mri_violation_log import DbMriViolationLog
 from lib.db.models.parameter_type import DbParameterType
 from lib.db.models.project import DbProject
 from lib.db.models.session import DbSession
@@ -93,6 +94,13 @@ from loris_data_manager.providers.mri_upload import (
     MriUploadObject,
     register_mri_upload_schema,
 )
+from loris_data_manager.providers.mri_violation import (
+    DICOM_ARCHIVE_MRI_VIOLATION,
+    MRI_VIOLATION,
+    MRI_VIOLATION_DICOM_ARCHIVE,
+    MriViolationObject,
+    register_mri_violation_schema,
+)
 
 READ_CONTEXT = FilesystemPropertyReadContext({})
 
@@ -103,6 +111,7 @@ def make_schema() -> ResourceSchema:
     register_dicom_schema(schema)
     register_imaging_schema(schema)
     register_mri_upload_schema(schema)
+    register_mri_violation_schema(schema)
     return schema
 
 
@@ -209,6 +218,26 @@ def mri_upload_for_archive(db: Session, archive: DbDicomArchive) -> DbMriUpload:
     return upload
 
 
+def add_mri_violation(db: Session, archive: DbDicomArchive) -> DbMriViolationLog:
+    violation = DbMriViolationLog(
+        series_uid="1.2.3.4.5",
+        dicom_archive_id=archive.id,
+        file_path=Path("assembly/000001/V1/mri/violations/example.mnc"),
+        patient_name="DCC001_000001_V1",
+        candidate_id=11,
+        visit_label="V1",
+        check_id=4,
+        scan_type_id=7,
+        severity="exclude",
+        header="RepetitionTime",
+        value="3.0",
+        valid_range="1.5-2.5",
+    )
+    db.add(violation)
+    db.flush()
+    return violation
+
+
 def test_resolves_mri_upload_with_owned_row_and_non_owning_context(db: Session):
     archive = add_dicom_archive(db)
     upload = mri_upload_for_archive(db, archive)
@@ -234,6 +263,67 @@ def test_resolves_mri_upload_with_owned_row_and_non_owning_context(db: Session):
     }
     assert MRI_UPLOAD_DICOM_ARCHIVE.traversal_semantics is RelationshipSemantics.PRODUCES
     assert MRI_UPLOAD_DICOM_ARCHIVE.lifecycle is LifecycleSemantics.REFERENCES
+
+
+def test_resolves_mri_violation_with_owned_row_file_and_archive_context(db: Session):
+    archive = add_dicom_archive(db)
+    violation = add_mri_violation(db, archive)
+    schema = make_schema()
+
+    fragment = ResourceModel(schema).resolve(
+        db,
+        schema.provider(MRI_VIOLATION.name),
+        ObjectSelection(
+            refs=frozenset({ObjectRef(MRI_VIOLATION.name, str(violation.id))})
+        ),
+    )
+
+    assert fragment.logical_objects == (MriViolationObject(violation),)
+    assert len(fragment.physical_objects) == 2
+    assert {link.member.member_name for link in fragment.links} == {
+        "dicom-archive",
+        "row",
+        "file",
+    }
+    assert MRI_VIOLATION_DICOM_ARCHIVE.traversal_semantics is RelationshipSemantics.DERIVED_FROM
+    assert MRI_VIOLATION_DICOM_ARCHIVE.lifecycle is LifecycleSemantics.REFERENCES
+
+
+def test_inspection_projects_archive_mri_violations_on_demand(db: Session):
+    archive = add_dicom_archive(db)
+    violation = add_mri_violation(db, archive)
+
+    result = inspect_resources(
+        db,
+        make_schema(),
+        InspectionQuery(
+            selections=(inspection_selection("dicom-archive.mri-violation"),),
+            criteria=parse_where_expressions((f"dicom-archive.id={archive.id}",)),
+        ),
+    )
+
+    assert result.selected == {ObjectRef(MRI_VIOLATION.name, str(violation.id))}
+    violation_document = next(
+        obj
+        for obj in json.loads(format_inspection_json(result))["objects"]
+        if obj["kind"] == MRI_VIOLATION.name
+    )
+    assert violation_document["properties"] == {
+        "id": violation.id,
+        "series-uid": "1.2.3.4.5",
+        "patient-name": "DCC001_000001_V1",
+        "candidate-id": 11,
+        "visit-label": "V1",
+        "check-id": 4,
+        "scan-type-id": 7,
+        "severity": "exclude",
+        "header": "RepetitionTime",
+        "value": "3.0",
+        "valid-range": "1.5-2.5",
+        "valid-regex": None,
+    }
+    assert DICOM_ARCHIVE_MRI_VIOLATION.traversal_semantics is RelationshipSemantics.PRODUCES
+    assert DICOM_ARCHIVE_MRI_VIOLATION.lifecycle is LifecycleSemantics.REFERENCES
 
 
 def test_inspection_projects_mri_upload_metadata_and_dicom_archive(db: Session):
@@ -610,6 +700,7 @@ def test_schema_can_be_extended_without_modifying_core_types():
         "dicom-archive",
         "imaging-file",
         "mri-upload",
+        "mri-violation",
         "database-row",
         "local-path",
         "example.genetic-dataset",
@@ -1818,6 +1909,7 @@ def test_inspection_can_expand_related_session_and_render_text_and_json(db: Sess
     assert "series-row [owns; on-demand]: not loaded" in text
     assert "file-row [owns; on-demand]: not loaded" in text
     assert "mri-upload [references; on-demand]: not loaded" in text
+    assert "mri-violation [references; on-demand]: not loaded" in text
 
     document = json.loads(format_inspection_json(result))
     assert document["selected"] == [f"dicom-archive:{archive.id}"]
@@ -1839,6 +1931,7 @@ def test_inspection_can_expand_related_session_and_render_text_and_json(db: Sess
         "series-row",
         "file-row",
         "mri-upload",
+        "mri-violation",
     ]
 
 
