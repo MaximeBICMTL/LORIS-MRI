@@ -11,6 +11,7 @@ from lib.db.models.dicom_archive_file import DbDicomArchiveFile
 from lib.db.models.dicom_archive_series import DbDicomArchiveSeries
 from lib.db.models.file import DbFile
 from lib.db.models.file_parameter import DbFileParameter
+from lib.db.models.mri_protocol_violated_scan import DbMriProtocolViolatedScan
 from lib.db.models.mri_upload import DbMriUpload
 from lib.db.models.mri_violation_log import DbMriViolationLog
 from lib.db.models.parameter_type import DbParameterType
@@ -89,6 +90,13 @@ from loris_data_manager.providers.imaging import (
     ImagingFileObject,
     register_imaging_schema,
 )
+from loris_data_manager.providers.mri_protocol_violated_scan import (
+    DICOM_ARCHIVE_PROTOCOL_VIOLATED_SCAN,
+    MRI_PROTOCOL_VIOLATED_SCAN,
+    MRI_PROTOCOL_VIOLATED_SCAN_DICOM_ARCHIVE,
+    MriProtocolViolatedScanObject,
+    register_mri_protocol_violated_scan_schema,
+)
 from loris_data_manager.providers.mri_upload import (
     DICOM_ARCHIVE_MRI_UPLOAD,
     MRI_UPLOAD,
@@ -114,6 +122,7 @@ def make_schema() -> ResourceSchema:
     register_imaging_schema(schema)
     register_mri_upload_schema(schema)
     register_mri_violation_schema(schema)
+    register_mri_protocol_violated_scan_schema(schema)
     return schema
 
 
@@ -240,6 +249,38 @@ def add_mri_violation(db: Session, archive: DbDicomArchive) -> DbMriViolationLog
     return violation
 
 
+def add_mri_protocol_violated_scan(
+    db: Session, archive: DbDicomArchive
+) -> DbMriProtocolViolatedScan:
+    scan = DbMriProtocolViolatedScan(
+        candidate_id=11,
+        pscid="EX123456",
+        dicom_archive_id=archive.id,
+        series_description="unrecognized protocol",
+        file_path=Path("trashbin/000001/V1/mri/unknown/example.mnc"),
+        patient_name="DCC001_000001_V1",
+        tr_range="3.0",
+        te_range="0.03",
+        ti_range="0.9",
+        slice_thickness_range="1.0",
+        xspace_range="256",
+        yspace_range="256",
+        zspace_range="176",
+        xstep_range="1.0",
+        ystep_range="1.0",
+        zstep_range="1.0",
+        time_range="1",
+        series_uid="1.2.3.4.6",
+        image_type="ORIGINAL\\PRIMARY",
+        phase_encoding_direction="j-",
+        echo_number="1",
+        protocol_group_id=None,
+    )
+    db.add(scan)
+    db.flush()
+    return scan
+
+
 def test_resolves_mri_upload_with_owned_row_and_non_owning_context(db: Session):
     archive = add_dicom_archive(db)
     upload = mri_upload_for_archive(db, archive)
@@ -326,6 +367,98 @@ def test_inspection_projects_archive_mri_violations_on_demand(db: Session):
     }
     assert DICOM_ARCHIVE_MRI_VIOLATION.traversal_semantics is RelationshipSemantics.PRODUCES
     assert DICOM_ARCHIVE_MRI_VIOLATION.lifecycle is LifecycleSemantics.REFERENCES
+
+
+def test_resolves_protocol_violated_scan_with_resources_and_context(db: Session):
+    archive = add_dicom_archive(db)
+    scan = add_mri_protocol_violated_scan(db, archive)
+    schema = make_schema()
+
+    fragment = ResourceModel(schema).resolve(
+        db,
+        schema.provider(MRI_PROTOCOL_VIOLATED_SCAN.name),
+        ObjectSelection(
+            refs=frozenset(
+                {ObjectRef(MRI_PROTOCOL_VIOLATED_SCAN.name, str(scan.id))}
+            )
+        ),
+    )
+
+    assert fragment.logical_objects == (MriProtocolViolatedScanObject(scan),)
+    assert len(fragment.physical_objects) == 2
+    assert {link.member.member_name for link in fragment.links} == {
+        "candidate",
+        "dicom-archive",
+        "row",
+        "file",
+    }
+    assert (
+        MRI_PROTOCOL_VIOLATED_SCAN_DICOM_ARCHIVE.traversal_semantics
+        is RelationshipSemantics.DERIVED_FROM
+    )
+    assert (
+        MRI_PROTOCOL_VIOLATED_SCAN_DICOM_ARCHIVE.lifecycle
+        is LifecycleSemantics.REFERENCES
+    )
+
+
+def test_inspection_projects_archive_protocol_violated_scans_on_demand(db: Session):
+    archive = add_dicom_archive(db)
+    scan = add_mri_protocol_violated_scan(db, archive)
+
+    result = inspect_resources(
+        db,
+        make_schema(),
+        InspectionQuery(
+            selections=(
+                inspection_selection("dicom-archive.protocol-violated-scan"),
+            ),
+            criteria=parse_where_expressions((f"dicom-archive.id={archive.id}",)),
+        ),
+    )
+
+    assert result.selected == {
+        ObjectRef(MRI_PROTOCOL_VIOLATED_SCAN.name, str(scan.id))
+    }
+    scan_document = next(
+        obj
+        for obj in json.loads(format_inspection_json(result))["objects"]
+        if obj["kind"] == MRI_PROTOCOL_VIOLATED_SCAN.name
+    )
+    assert scan_document["properties"] == {
+        "id": scan.id,
+        "psc-id": "EX123456",
+        "patient-name": "DCC001_000001_V1",
+        "series-description": "unrecognized protocol",
+        "series-uid": "1.2.3.4.6",
+        "repetition-time": "3.0",
+        "echo-time": "0.03",
+        "inversion-time": "0.9",
+        "slice-thickness": "1.0",
+        "x-space": "256",
+        "y-space": "256",
+        "z-space": "176",
+        "x-step": "1.0",
+        "y-step": "1.0",
+        "z-step": "1.0",
+        "time": "1",
+        "image-type": "ORIGINAL\\PRIMARY",
+        "phase-encoding-direction": "j-",
+        "echo-number": "1",
+        "protocol-group-id": None,
+    }
+    assert (
+        DICOM_ARCHIVE_PROTOCOL_VIOLATED_SCAN.traversal_semantics
+        is RelationshipSemantics.PRODUCES
+    )
+    assert (
+        DICOM_ARCHIVE_PROTOCOL_VIOLATED_SCAN.lifecycle
+        is LifecycleSemantics.REFERENCES
+    )
+    assert (
+        DICOM_ARCHIVE_PROTOCOL_VIOLATED_SCAN.reference_update
+        is ReferenceUpdateSemantics.SET_NULL
+    )
 
 
 def test_inspection_projects_mri_upload_metadata_and_dicom_archive(db: Session):
@@ -724,6 +857,7 @@ def test_schema_can_be_extended_without_modifying_core_types():
         "imaging-file",
         "mri-upload",
         "mri-violation",
+        "mri-protocol-violated-scan",
         "database-row",
         "local-path",
         "example.genetic-dataset",
@@ -1934,6 +2068,7 @@ def test_inspection_can_expand_related_session_and_render_text_and_json(db: Sess
     assert "imaging-file [references; on-demand]: not loaded" in text
     assert "mri-upload [references; on-demand]: not loaded" in text
     assert "mri-violation [references; on-demand]: not loaded" in text
+    assert "protocol-violated-scan [references; on-demand]: not loaded" in text
 
     document = json.loads(format_inspection_json(result))
     assert document["selected"] == [f"dicom-archive:{archive.id}"]
@@ -1957,6 +2092,7 @@ def test_inspection_can_expand_related_session_and_render_text_and_json(db: Sess
         "imaging-file",
         "mri-upload",
         "mri-violation",
+        "protocol-violated-scan",
     ]
 
 

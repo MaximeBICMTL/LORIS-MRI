@@ -35,6 +35,9 @@ from loris_data_manager.provider import ResourceSchema
 from loris_data_manager.providers.core import register_core_schema
 from loris_data_manager.providers.dicom import register_dicom_schema
 from loris_data_manager.providers.imaging import register_imaging_schema
+from loris_data_manager.providers.mri_protocol_violated_scan import (
+    register_mri_protocol_violated_scan_schema,
+)
 from loris_data_manager.providers.mri_upload import register_mri_upload_schema
 from loris_data_manager.providers.mri_violation import register_mri_violation_schema
 from loris_data_manager.schema import (
@@ -64,6 +67,7 @@ def make_resource_schema() -> ResourceSchema:
     register_imaging_schema(schema)
     register_mri_upload_schema(schema)
     register_mri_violation_schema(schema)
+    register_mri_protocol_violated_scan_schema(schema)
     return schema
 
 

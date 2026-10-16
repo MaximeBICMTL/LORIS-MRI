@@ -2,8 +2,85 @@
 
 Experimental logical resource model and data-management tools for LORIS.
 
-The package currently provides a read-only resource inspector. Its API is unstable while the
-resource model and operation semantics are developed through concrete vertical slices.
+The package currently provides a read-only resource inspector and verified resource backups. Its
+API is unstable while the resource model and operation semantics are developed through concrete
+vertical slices.
+
+## Proposed deletion design
+
+The first deletion vertical slice will require a newly created, verified backup. Backup-free
+deletion may become an explicit policy later, but backup must not be inseparable from the internal
+deletion architecture. A dry-run only plans the operation and does not require a backup.
+
+Backup and deletion must use the same materialized physical plan, database connection,
+transaction, and locks. Calling the current standalone `create_backup()` and subsequently opening
+a new transaction for deletion would introduce a time-of-check/time-of-use gap. Extract its
+transactional core into an operation pipeline before adding execution.
+
+The intended execution sequence is:
+
+1. Begin one explicit repeatable-read database transaction.
+2. Resolve the semantic selection, lock the anchor rows, and freeze their exact identities.
+3. Build the ownership closure and incoming-reference plan from those identities. Lock all rows
+   that will be deleted or updated, and fail on unapproved references.
+4. Copy all owned files and serialize all deleted rows and reference-restoration patches into a
+   durable backup. Finalize and verify that artifact before any destructive change.
+5. Apply approved nullable-reference updates, then delete owned database rows child-to-parent,
+   checking exact affected-row counts. Do not commit yet.
+6. Atomically rename each live file into an operation-specific quarantine directory on the same
+   filesystem as its storage root. Verify that each quarantined object is the planned object and
+   still corresponds to the verified backup.
+7. Commit the database transaction only after every file is quarantined and verified.
+8. Purge the quarantine after commit. A purge failure leaves cleanup debt outside the live
+   namespace; it must not restore files whose database deletion has committed.
+
+Quarantine makes filesystem changes reversible while the database transaction is uncommitted. If
+database deletion fails before quarantine, simply roll back. If a quarantine move or verification
+fails, restore all paths already moved and roll back. If the database commit is known to have
+failed, restore the quarantined paths. An indeterminate commit outcome requires reconciliation
+rather than blindly restoring paths.
+
+The quarantine is not a backup: it is temporary, root-local rollback state and is destroyed after
+commit. The durable backup may live on another filesystem and remains usable after the operation.
+Same-filesystem rename removes the live pathname atomically, but it cannot freeze an inode already
+open by another process. Pre/post-copy checks, path and inode checks around rename, and a digest
+comparison against the verified backup detect ordinary changes and substitutions; they cannot
+prevent writes through an already-open file descriptor. The initial contract therefore assumes
+registered imaging resources are immutable during management operations. Stronger guarantees
+would require writer coordination, maintenance mode, immutable files, or storage snapshots.
+
+Incoming foreign keys use three operation actions:
+
+- `delete`: the referencing rows are in the selected object's ownership closure;
+- `set-null`: the relationship explicitly permits detachment and the request names it with the
+  repeatable short-form `--update RELATIONSHIP-PATH` option;
+- `block`: the relationship is unknown, was not explicitly requested, is not approved by the
+  schema, does not match the reflected live foreign key, or is not nullable.
+
+The schema declares which semantic relationship may be cleared; the CLI request authorizes doing
+so for one operation. Nullability alone never grants permission. For example, deleting a DICOM
+archive may be planned with:
+
+```bash
+loris-data-manager backup \
+  --select dicom-archive \
+  --where dicom-archive.id=76 \
+  --update dicom-archive.mri-upload \
+  --update dicom-archive.mri-violation \
+  --update dicom-archive.protocol-violated-scan \
+  --update dicom-archive.imaging-file
+```
+
+A standalone backup with `--update` remains read-only. It records the intended `set-null` actions
+and writes guarded restoration statements using the referencing row's primary key and `FK IS
+NULL`. Restoration inserts the archive and its owned rows parent-to-child, then restores surviving
+references. Eventual deletion must consume the same plan and perform those `set-null` updates
+before deleting the referenced archive. All reflected foreign keys not covered by owned rows or an
+explicit requested update remain blockers.
+
+The initial deletion CLI should default to dry-run and require a conspicuous execution flag. Empty
+or broad selections retain the existing `--all` guard. Missing, changed, unexpected, or unsafe
+paths; mismatched row counts; new blockers; and revalidation failures must all fail closed.
 
 ## Design notes
 
@@ -31,5 +108,11 @@ resource model and operation semantics are developed through concrete vertical s
   physical rows. Revisit the representation, operation limits, or an identity spool only if
   selecting very large numbers of logical anchor objects becomes a concrete requirement.
 - Database row locks do not protect local files. File copying currently detects changes during a
-  copy, but a future deletion implementation must define revalidation or quarantine behavior for
-  changes between backup and filesystem removal, including explicit symlink semantics.
+  copy; deletion must implement the quarantine and revalidation contract above, including
+  explicit symlink semantics.
+- The current `mri-violation` kind represents one `mri_violations_log` check failure, not one
+  underlying scan. Several such rows can name the same file, and warning rows can name a file
+  already owned by an `imaging-file`. Its current `file` ownership binding is therefore too strong.
+  Do not permit deletion of `mri-violation` objects until scan/file identity and shared ownership
+  are modeled explicitly. This does not prevent DICOM archive removal from setting the violation
+  rows' nullable `TarchiveID` references to `NULL`, because those rows and files remain in place.

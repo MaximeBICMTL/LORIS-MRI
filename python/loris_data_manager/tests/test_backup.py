@@ -8,6 +8,7 @@ from lib.db.models.dicom_archive_file import DbDicomArchiveFile
 from lib.db.models.dicom_archive_series import DbDicomArchiveSeries
 from lib.db.models.file import DbFile
 from lib.db.models.file_parameter import DbFileParameter
+from lib.db.models.mri_protocol_violated_scan import DbMriProtocolViolatedScan
 from lib.db.models.mri_upload import DbMriUpload
 from lib.db.models.mri_violation_log import DbMriViolationLog
 from lib.db.models.parameter_type import DbParameterType
@@ -189,10 +190,15 @@ def test_dicom_backup_records_approved_reference_updates_and_restoration_sql(
             dicom_archive_id=archive.id,
             file_path=Path("assembly/example/violation.mnc"),
         )
-        db.add_all((imaging_file, violation))
+        protocol_violated_scan = DbMriProtocolViolatedScan(
+            dicom_archive_id=archive.id,
+            file_path=Path("trashbin/example/unknown.mnc"),
+        )
+        db.add_all((imaging_file, violation, protocol_violated_scan))
         db.flush()
         imaging_file_id = imaging_file.id
         violation_id = violation.id
+        protocol_violated_scan_id = protocol_violated_scan.id
         upload = db.scalar(
             select(DbMriUpload).where(DbMriUpload.dicom_archive_id == archive.id)
         )
@@ -208,6 +214,7 @@ def test_dicom_backup_records_approved_reference_updates_and_restoration_sql(
     update_expressions = (
         "dicom-archive.mri-upload",
         "dicom-archive.mri-violation",
+        "dicom-archive.protocol-violated-scan",
         "dicom-archive.imaging-file",
     )
     output = tmp_path / "backup"
@@ -230,13 +237,15 @@ def test_dicom_backup_records_approved_reference_updates_and_restoration_sql(
     )
 
     assert result.blocker_count == 0
-    assert result.reference_update_count == 3
+    assert result.reference_update_count == 4
     restore_sql = (output / "restore.sql").read_text()
     expected_updates = (
         f"UPDATE `mri_upload` SET `TarchiveID` = {archive_id} "
         f"WHERE `UploadID` = {upload_id} AND `TarchiveID` IS NULL;",
         f"UPDATE `mri_violations_log` SET `TarchiveID` = {archive_id} "
         f"WHERE `LogID` = {violation_id} AND `TarchiveID` IS NULL;",
+        f"UPDATE `mri_protocol_violated_scans` SET `TarchiveID` = {archive_id} "
+        f"WHERE `ID` = {protocol_violated_scan_id} AND `TarchiveID` IS NULL;",
         f"UPDATE `files` SET `TarchiveSource` = {archive_id} "
         f"WHERE `FileID` = {imaging_file_id} AND `TarchiveSource` IS NULL;",
     )
@@ -258,12 +267,18 @@ def test_dicom_backup_records_approved_reference_updates_and_restoration_sql(
     assert manifest["prospective_removal"] == {
         "blocker_count": 0,
         "eligible": True,
-        "reference_update_count": 3,
+        "reference_update_count": 4,
     }
 
     with Session(db_engine) as db:
         assert db.get(DbMriUpload, upload_id).dicom_archive_id == archive_id  # type: ignore[union-attr]
         assert db.get(DbMriViolationLog, violation_id).dicom_archive_id == archive_id  # type: ignore[union-attr]
+        assert (
+            db.get(
+                DbMriProtocolViolatedScan, protocol_violated_scan_id
+            ).dicom_archive_id  # type: ignore[union-attr]
+            == archive_id
+        )
         assert db.get(DbFile, imaging_file_id).dicom_archive_id == archive_id  # type: ignore[union-attr]
 
 
@@ -472,6 +487,65 @@ def test_mri_upload_backup_captures_only_its_explicitly_selected_row(
     verify_backup(output)
 
 
+def test_protocol_violated_scan_backup_captures_its_row_and_file(
+    db_engine: Engine,
+    tmp_path: Path,
+):
+    with Session(db_engine) as db:
+        archive = _add_archive(db)
+        scan = DbMriProtocolViolatedScan(
+            dicom_archive_id=archive.id,
+            file_path=Path("trashbin/example/unknown.mnc"),
+        )
+        db.add(scan)
+        db.flush()
+        scan_id = scan.id
+        db.commit()
+
+    data_root = tmp_path / "data-root"
+    source = data_root / "trashbin" / "example" / "unknown.mnc"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"unclassified scan")
+    schema = make_resource_schema()
+    output = tmp_path / "backup"
+
+    result = create_backup(
+        db_engine,
+        schema,
+        BackupRequest(
+            output=output,
+            selection=BackupSelection(
+                selections=(
+                    parse_resource_selection(
+                        schema, "mri-protocol-violated-scan"
+                    ),
+                ),
+                criteria=(
+                    schema.criterion("mri-protocol-violated-scan.id", scan_id),
+                ),
+            ),
+            storage_roots={"imaging-data": data_root},
+        ),
+    )
+
+    assert result.selected_object_count == 1
+    assert result.database_row_count == 1
+    assert result.file_count == 1
+    assert result.blocker_count == 0
+    assert (
+        output
+        / "files"
+        / "imaging-data"
+        / "trashbin"
+        / "example"
+        / "unknown.mnc"
+    ).read_bytes() == b"unclassified scan"
+    restore_sql = (output / "restore.sql").read_text()
+    assert "INSERT INTO `mri_protocol_violated_scans` " in restore_sql
+    assert "INSERT INTO `tarchive` " not in restore_sql
+    verify_backup(output)
+
+
 def test_backup_combines_explicit_archive_and_mri_upload_projections(
     db_engine: Engine,
     tmp_path: Path,
@@ -622,6 +696,9 @@ def test_backup_uses_the_shared_semantic_projection_plan():
     assert required_storage_roots(schema, "dicom-archive") == ("dicom-archive",)
     assert required_storage_roots(schema, "imaging-file") == ("imaging-data",)
     assert required_storage_roots(schema, "mri-upload") == ()
+    assert required_storage_roots(schema, "mri-protocol-violated-scan") == (
+        "imaging-data",
+    )
 
 
 def test_backup_discovers_reference_from_table_unknown_to_orm(
