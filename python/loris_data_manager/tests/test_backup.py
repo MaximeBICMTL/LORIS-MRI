@@ -598,7 +598,10 @@ def test_backup_combines_explicit_archive_and_mri_upload_projections(
     }
 
 
-def test_backup_copies_the_target_of_an_archive_symlink(db_engine: Engine, tmp_path: Path):
+def test_backup_preserves_an_archive_symlink_without_copying_its_target(
+    db_engine: Engine,
+    tmp_path: Path,
+):
     with Session(db_engine) as db:
         archive = _add_archive(db)
         archive_id = archive.id
@@ -619,11 +622,21 @@ def test_backup_copies_the_target_of_an_archive_symlink(db_engine: Engine, tmp_p
     )
 
     payload = output / "files" / "dicom-archive" / "2026" / "archive.tar"
-    assert payload.read_bytes() == b"symlink target contents"
-    assert not payload.is_symlink()
+    assert payload.is_symlink()
+    assert payload.readlink() == target
     manifest = verify_backup(output)
     files = cast(list[dict[str, object]], manifest["files"])
-    assert files[0]["source_was_symlink"] is True
+    assert files[0]["path_type"] == "symlink"
+    assert files[0]["link_target"] == str(target)
+
+    target.unlink()
+    assert payload.is_symlink()
+    verify_backup(output)
+
+    payload.unlink()
+    payload.symlink_to("changed-target")
+    with pytest.raises(ValueError, match="target does not match"):
+        verify_backup(output)
 
 
 def test_backup_rejects_an_empty_selection(db_engine: Engine, tmp_path: Path):

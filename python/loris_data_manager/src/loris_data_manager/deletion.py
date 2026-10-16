@@ -182,14 +182,14 @@ class _DicomArchiveDeletion(BackupTransactionAction):
                 "relative_path"
             ) != str(relative):
                 raise RuntimeError("Backup file order is internally inconsistent")
-            if entry.get("source_was_symlink") is not False:
-                raise ValueError(
-                    f"Deletion does not support symbolic-link resources: "
-                    f"{pending.storage_root}:{relative}"
-                )
+            path_type = entry.get("path_type")
             digest = entry.get("sha256")
             size = entry.get("size")
-            if not isinstance(digest, str) or not isinstance(size, int):
+            if (
+                path_type not in {"regular-file", "symlink"}
+                or not isinstance(digest, str)
+                or not isinstance(size, int)
+            ):
                 raise RuntimeError("Verified backup has invalid file metadata")
             source = root.joinpath(*relative.parts)
             quarantine_root = self._quarantine_root(
@@ -201,13 +201,26 @@ class _DicomArchiveDeletion(BackupTransactionAction):
             destination.parent.mkdir(parents=True, exist_ok=True)
             _require_real_path(root, relative.parent)
             _require_real_path(quarantine_root, relative.parent)
-            _quarantine_verified_file(
-                source,
-                destination,
-                expected_size=size,
-                expected_digest=digest,
-                moved=self._moved,
-            )
+            if path_type == "regular-file":
+                _quarantine_verified_file(
+                    source,
+                    destination,
+                    expected_size=size,
+                    expected_digest=digest,
+                    moved=self._moved,
+                )
+            else:
+                link_target = entry.get("link_target")
+                if not isinstance(link_target, str):
+                    raise RuntimeError("Verified backup has invalid symbolic-link metadata")
+                _quarantine_verified_symlink(
+                    source,
+                    destination,
+                    expected_target=link_target,
+                    expected_size=size,
+                    expected_digest=digest,
+                    moved=self._moved,
+                )
 
     def _quarantine_root(self, name: str, root: Path, operation_id: str) -> Path:
         existing = self._quarantine_roots.get(name)
@@ -357,3 +370,50 @@ def _quarantine_verified_file(
         raise ValueError(f"Cannot quarantine deletion source file {source}") from error
     if (quarantined.st_dev, quarantined.st_ino) != (before.st_dev, before.st_ino):
         raise ValueError(f"Quarantined file identity changed: {destination}")
+
+
+def _quarantine_verified_symlink(
+    source: Path,
+    destination: Path,
+    *,
+    expected_target: str,
+    expected_size: int,
+    expected_digest: str,
+    moved: list[tuple[Path, Path]],
+) -> None:
+    try:
+        before = source.lstat()
+        if not stat.S_ISLNK(before.st_mode):
+            raise ValueError(f"Deletion source is not a symbolic link: {source}")
+        target = os.readlink(source)
+        current = source.lstat()
+    except OSError as error:
+        raise ValueError(f"Cannot revalidate deletion source symbolic link {source}") from error
+    target_bytes = os.fsencode(target)
+    if (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
+        raise ValueError(f"Deletion source symbolic link changed while it was read: {source}")
+    if (
+        target != expected_target
+        or len(target_bytes) != expected_size
+        or hashlib.sha256(target_bytes).hexdigest() != expected_digest
+    ):
+        raise ValueError(
+            f"Deletion source symbolic link no longer matches its verified backup: {source}"
+        )
+    if destination.parent.stat().st_dev != before.st_dev:
+        raise ValueError(f"Quarantine is not on the source filesystem: {destination}")
+    try:
+        os.replace(source, destination)
+        moved.append((source, destination))
+        quarantined = destination.lstat()
+        quarantined_target = os.readlink(destination)
+    except OSError as error:
+        raise ValueError(
+            f"Cannot quarantine deletion source symbolic link {source}"
+        ) from error
+    if (
+        not stat.S_ISLNK(quarantined.st_mode)
+        or (quarantined.st_dev, quarantined.st_ino) != (before.st_dev, before.st_ino)
+        or quarantined_target != target
+    ):
+        raise ValueError(f"Quarantined symbolic link identity changed: {destination}")

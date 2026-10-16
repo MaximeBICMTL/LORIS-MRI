@@ -47,7 +47,7 @@ from loris_data_manager.schema import (
 )
 
 BACKUP_FORMAT = "loris-resource-backup"
-BACKUP_FORMAT_VERSION = 3
+BACKUP_FORMAT_VERSION = 4
 COPY_BUFFER_SIZE = 1024 * 1024
 ROW_BATCH_SIZE = 500
 MYSQL_RESTORE_DIALECT = mysql.dialect(paramstyle="named")
@@ -1304,14 +1304,33 @@ def verify_backup(path: Path) -> Mapping[str, object]:
         if not isinstance(loaded_entry, dict):
             raise ValueError("Backup manifest has an invalid file entry")
         entry = cast(dict[str, object], loaded_entry)
+        path_type = entry.get("path_type")
         payload = entry.get("payload")
         digest = entry.get("sha256")
         size = entry.get("size")
-        if not isinstance(payload, str) or not isinstance(digest, str) or not isinstance(size, int):
+        if (
+            path_type not in {"regular-file", "symlink"}
+            or not isinstance(payload, str)
+            or not isinstance(digest, str)
+            or not isinstance(size, int)
+        ):
             raise ValueError("Backup manifest has an invalid file entry")
-        payload_path = _verify_payload(artifact, PurePosixPath(payload), digest)
-        if payload_path.stat().st_size != size:
-            raise ValueError(f"Backup payload has the wrong size: {payload}")
+        payload_path = PurePosixPath(payload)
+        if path_type == "regular-file":
+            verified_payload = _verify_payload(artifact, payload_path, digest)
+            if verified_payload.stat().st_size != size:
+                raise ValueError(f"Backup payload has the wrong size: {payload}")
+        else:
+            link_target = entry.get("link_target")
+            if not isinstance(link_target, str):
+                raise ValueError("Backup manifest has an invalid symbolic-link entry")
+            _verify_symlink_payload(
+                artifact,
+                payload_path,
+                expected_target=link_target,
+                expected_size=size,
+                expected_hash=digest,
+            )
     return manifest
 
 
@@ -1460,13 +1479,27 @@ def _copy_files(
         payload = PurePosixPath("files", pending.storage_root, *pending.relative_path.parts)
         destination = staging.joinpath(*payload.parts)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        size, digest, source_was_symlink = _copy_verified_regular_file(source, destination)
+        try:
+            source_metadata = source.lstat()
+        except OSError as error:
+            raise ValueError(f"Cannot inspect backup source file {source}") from error
+        if stat.S_ISLNK(source_metadata.st_mode):
+            size, digest, link_target = _copy_verified_symlink(source, destination)
+            path_metadata: dict[str, object] = {
+                "path_type": "symlink",
+                "link_target": link_target,
+            }
+        elif stat.S_ISREG(source_metadata.st_mode):
+            size, digest = _copy_verified_regular_file(source, destination)
+            path_metadata = {"path_type": "regular-file"}
+        else:
+            raise ValueError(f"Expected a regular file or symbolic link: {source}")
         entries.append(
             {
                 "object": {"kind": pending.object_kind, "id": pending.object_id},
                 "storage_root": pending.storage_root,
                 "relative_path": str(pending.relative_path),
-                "source_was_symlink": source_was_symlink,
+                **path_metadata,
                 "payload": str(payload),
                 "size": size,
                 "sha256": digest,
@@ -1475,14 +1508,16 @@ def _copy_files(
     return entries
 
 
-def _copy_verified_regular_file(source: Path, destination: Path) -> tuple[int, str, bool]:
+def _copy_verified_regular_file(source: Path, destination: Path) -> tuple[int, str]:
     try:
         source_metadata = source.lstat()
         before = source.stat()
     except OSError as error:
         raise ValueError(f"Cannot read backup source file {source}") from error
-    if not stat.S_ISREG(before.st_mode):
-        raise ValueError(f"Expected a regular backup source file or a symlink to one: {source}")
+    if not stat.S_ISREG(source_metadata.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise ValueError(f"Expected a regular backup source file: {source}")
+    if (source_metadata.st_dev, source_metadata.st_ino) != (before.st_dev, before.st_ino):
+        raise ValueError(f"Backup source changed while it was inspected: {source}")
 
     digest = hashlib.sha256()
     try:
@@ -1496,14 +1531,40 @@ def _copy_verified_regular_file(source: Path, destination: Path) -> tuple[int, s
             destination_file.flush()
             os.fsync(destination_file.fileno())
             after = os.fstat(source_file.fileno())
-        current = source.stat()
+        current = source.lstat()
     except OSError as error:
         raise ValueError(f"Cannot copy backup source file {source}") from error
     if (opened.st_size, opened.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
         raise ValueError(f"Backup source file changed while it was copied: {source}")
     if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
-        raise ValueError(f"Backup source symlink target changed while it was copied: {source}")
-    return after.st_size, digest.hexdigest(), stat.S_ISLNK(source_metadata.st_mode)
+        raise ValueError(f"Backup source changed while it was copied: {source}")
+    return after.st_size, digest.hexdigest()
+
+
+def _copy_verified_symlink(source: Path, destination: Path) -> tuple[int, str, str]:
+    try:
+        before = source.lstat()
+        if not stat.S_ISLNK(before.st_mode):
+            raise ValueError(f"Expected a symbolic-link backup source: {source}")
+        link_target = os.readlink(source)
+        after = source.lstat()
+    except OSError as error:
+        raise ValueError(f"Cannot read backup source symbolic link {source}") from error
+    if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+        raise ValueError(f"Backup source symbolic link changed while it was read: {source}")
+    if link_target != os.readlink(source):
+        raise ValueError(f"Backup source symbolic link target changed: {source}")
+
+    target_bytes = os.fsencode(link_target)
+    try:
+        os.symlink(link_target, destination)
+        copied = destination.lstat()
+        copied_target = os.readlink(destination)
+    except OSError as error:
+        raise ValueError(f"Cannot copy backup source symbolic link {source}") from error
+    if not stat.S_ISLNK(copied.st_mode) or copied_target != link_target:
+        raise ValueError(f"Copied backup symbolic link does not match its source: {source}")
+    return len(target_bytes), hashlib.sha256(target_bytes).hexdigest(), link_target
 
 
 def _validated_relative_path(storage_root: str, value: object) -> PurePosixPath:
@@ -1629,23 +1690,64 @@ def _mysql_string_literal(value: str) -> str:
 
 
 def _verify_payload(artifact: Path, relative_path: PurePosixPath, expected_hash: str) -> Path:
-    if relative_path.is_absolute() or ".." in relative_path.parts:
-        raise ValueError(f"Backup payload escapes the artifact: {relative_path}")
-    payload = artifact.joinpath(*relative_path.parts)
-    current = artifact
-    for part in relative_path.parts:
-        current /= part
-        try:
-            metadata = current.lstat()
-        except OSError as error:
-            raise ValueError(f"Cannot read backup payload {relative_path}") from error
-        if stat.S_ISLNK(metadata.st_mode):
-            raise ValueError(f"Backup payload must not contain symbolic links: {relative_path}")
+    payload = _payload_with_real_parents(artifact, relative_path)
+    try:
+        metadata = payload.lstat()
+    except OSError as error:
+        raise ValueError(f"Cannot read backup payload {relative_path}") from error
+    if stat.S_ISLNK(metadata.st_mode):
+        raise ValueError(f"Backup payload must not be a symbolic link: {relative_path}")
     if not stat.S_ISREG(payload.lstat().st_mode):
         raise ValueError(f"Backup payload is not a regular file: {relative_path}")
     if _hash_file(payload) != expected_hash:
         raise ValueError(f"Backup payload checksum failed: {relative_path}")
     return payload
+
+
+def _verify_symlink_payload(
+    artifact: Path,
+    relative_path: PurePosixPath,
+    *,
+    expected_target: str,
+    expected_size: int,
+    expected_hash: str,
+) -> None:
+    payload = _payload_with_real_parents(artifact, relative_path)
+    try:
+        metadata = payload.lstat()
+        target = os.readlink(payload)
+    except OSError as error:
+        raise ValueError(f"Cannot read backup symbolic link {relative_path}") from error
+    if not stat.S_ISLNK(metadata.st_mode):
+        raise ValueError(f"Backup payload is not a symbolic link: {relative_path}")
+    target_bytes = os.fsencode(target)
+    if target != expected_target:
+        raise ValueError(f"Backup symbolic-link target does not match: {relative_path}")
+    if len(target_bytes) != expected_size:
+        raise ValueError(f"Backup symbolic-link target has the wrong size: {relative_path}")
+    if hashlib.sha256(target_bytes).hexdigest() != expected_hash:
+        raise ValueError(f"Backup symbolic-link checksum failed: {relative_path}")
+
+
+def _payload_with_real_parents(artifact: Path, relative_path: PurePosixPath) -> Path:
+    if (
+        relative_path.is_absolute()
+        or ".." in relative_path.parts
+        or not relative_path.parts
+    ):
+        raise ValueError(f"Backup payload escapes the artifact: {relative_path}")
+    current = artifact
+    for part in relative_path.parts[:-1]:
+        current /= part
+        try:
+            metadata = current.lstat()
+        except OSError as error:
+            raise ValueError(f"Cannot read backup payload {relative_path}") from error
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError(
+                f"Backup payload parent is not a real directory: {relative_path}"
+            )
+    return artifact.joinpath(*relative_path.parts)
 
 
 def _hash_file(path: Path) -> str:

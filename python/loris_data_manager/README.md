@@ -23,13 +23,16 @@ The intended execution sequence is:
 2. Resolve the semantic selection, lock the anchor rows, and freeze their exact identities.
 3. Build the ownership closure and incoming-reference plan from those identities. Lock all rows
    that will be deleted or updated, and fail on unapproved references.
-4. Copy all owned files and serialize all deleted rows and reference-restoration patches into a
-   durable backup. Finalize and verify that artifact before any destructive change.
+4. Copy all owned filesystem entries and serialize all deleted rows and reference-restoration
+   patches into a durable backup. Regular files are copied by value; symbolic links are preserved
+   shallowly without reading their targets. Finalize and verify that artifact before any
+   destructive change.
 5. Apply approved nullable-reference updates, then delete owned database rows child-to-parent,
    checking exact affected-row counts. Do not commit yet.
-6. Atomically rename each live file into an operation-specific quarantine directory on the same
-   filesystem as its storage root. Verify that each quarantined object is the planned object and
-   still corresponds to the verified backup.
+6. Atomically rename each live file or symbolic link into an operation-specific quarantine
+   directory on the same filesystem as its storage root. Verify that each quarantined object is
+   the planned object and still corresponds to the verified backup. Never move or modify a
+   symbolic link's target.
 7. Commit the database transaction only after every file is quarantined and verified.
 8. Purge the quarantine after commit. A purge failure leaves cleanup debt outside the live
    namespace; it must not restore files whose database deletion has committed.
@@ -86,7 +89,10 @@ requested update remain blockers.
 The deletion CLI defaults to dry-run and requires the conspicuous `--execute` flag. Empty or broad
 selections retain the existing `--all` guard. Missing, changed, unexpected, or unsafe paths;
 mismatched row counts; new blockers; and revalidation failures all fail closed. Deletion currently
-rejects symbolic-link resources even though standalone backup follows and records their targets.
+supports a symbolic link only as the final managed path component. It preserves that link in the
+backup and moves and purges the link itself; it never reads, writes, or removes the target.
+Symbolic links in intermediate path components remain unsupported because operating below one
+would cross the configured storage-root path boundary.
 
 ## Design notes
 
@@ -115,7 +121,8 @@ rejects symbolic-link resources even though standalone backup follows and record
   selecting very large numbers of logical anchor objects becomes a concrete requirement.
 - Database row locks do not protect local files. File copying detects changes during a copy;
   deletion rehashes real regular files against the verified backup and moves them to the
-  operation-specific quarantine before commit. Symbolic links fail closed in this first slice.
+  operation-specific quarantine before commit. Symbolic links are backed up shallowly and
+  revalidated by filesystem identity and link text before the link itself is quarantined.
 - The proof of concept treats every surfaced commit failure as an indeterminate outcome and leaves
   quarantine in place for reconciliation; it does not yet distinguish a database-confirmed
   rollback that would permit automatic path restoration.

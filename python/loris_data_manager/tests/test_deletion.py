@@ -324,7 +324,7 @@ def test_quarantine_failure_restores_moved_files_and_rolls_back_database(
         )
 
 
-def test_deletion_rejects_symlink_resources_after_backing_them_up(
+def test_deletion_quarantines_and_purges_a_symlink_without_touching_its_target(
     db_engine: Engine,
     tmp_path: Path,
 ):
@@ -340,7 +340,74 @@ def test_deletion_rejects_symlink_resources_after_backing_them_up(
     source.symlink_to(target)
     output = tmp_path / "backup"
 
-    with pytest.raises(ValueError, match="symbolic-link resources"):
+    result = delete_resources(
+        db_engine,
+        make_resource_schema(),
+        _request(
+            archive_root,
+            output,
+            archive_id=archive_id,
+            update_upload=True,
+        ),
+    )
+
+    verify_backup(output)
+    backup_link = output / "files" / "dicom-archive" / "2026" / "archive.tar"
+    assert backup_link.is_symlink()
+    assert backup_link.readlink() == target
+    assert result.quarantine_purged
+    assert not source.is_symlink()
+    assert not source.exists()
+    assert target.read_bytes() == b"external target"
+    with Session(db_engine) as db:
+        assert db.get(DbDicomArchive, archive_id) is None
+
+
+def test_deletion_failure_restores_a_quarantined_symlink(
+    db_engine: Engine,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with Session(db_engine) as db:
+        archive = _add_archive(db)
+        archive_id = archive.id
+        db.commit()
+    archive_root = tmp_path / "archive-root"
+    target = tmp_path / "readonly-target.tar"
+    target.write_bytes(b"external target")
+    target.chmod(0o444)
+    source = archive_root / "2026" / "archive.tar"
+    source.parent.mkdir(parents=True)
+    source.symlink_to(target)
+    output = tmp_path / "backup"
+    original_quarantine = deletion_module._quarantine_verified_symlink  # pyright: ignore[reportPrivateUsage]
+
+    def fail_after_quarantine(
+        source: Path,
+        destination: Path,
+        *,
+        expected_target: str,
+        expected_size: int,
+        expected_digest: str,
+        moved: list[tuple[Path, Path]],
+    ) -> None:
+        original_quarantine(
+            source,
+            destination,
+            expected_target=expected_target,
+            expected_size=expected_size,
+            expected_digest=expected_digest,
+            moved=moved,
+        )
+        raise ValueError("simulated post-quarantine failure")
+
+    monkeypatch.setattr(
+        deletion_module,
+        "_quarantine_verified_symlink",
+        fail_after_quarantine,
+    )
+
+    with pytest.raises(ValueError, match="simulated post-quarantine failure"):
         delete_resources(
             db_engine,
             make_resource_schema(),
@@ -354,7 +421,9 @@ def test_deletion_rejects_symlink_resources_after_backing_them_up(
 
     verify_backup(output)
     assert source.is_symlink()
+    assert source.readlink() == target
     assert target.read_bytes() == b"external target"
+    assert not tuple((archive_root / QUARANTINE_DIRECTORY).glob("*"))
     with Session(db_engine) as db:
         assert db.get(DbDicomArchive, archive_id) is not None
 
