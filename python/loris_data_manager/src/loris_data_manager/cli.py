@@ -195,6 +195,17 @@ def backup(
             help="Filter selected objects by a semantic property; repeat to combine with AND.",
         ),
     ] = None,
+    update: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--update",
+            metavar="RELATIONSHIP-PATH",
+            help=(
+                "Plan an approved nullable foreign-key update and include its "
+                "restoration patch; repeat to add relationships."
+            ),
+        ),
+    ] = None,
     select_all: Annotated[
         bool,
         typer.Option("--all", help="Allow backup without a narrowing anchor selector."),
@@ -209,11 +220,15 @@ def backup(
         selections = tuple(
             parse_resource_selection(schema, expression) for expression in select
         )
+        updates = tuple(
+            parse_resource_selection(schema, expression) for expression in update or ()
+        )
         selection = BackupSelection(
             selections=selections,
             criteria=criteria,
             where_expressions=expressions,
             select_all=select_all,
+            updates=updates,
         )
         plan_backup(schema, selection)
         storage_root_names = tuple(
@@ -259,6 +274,11 @@ def backup(
     if result.blocker_count:
         typer.echo(
             f"Recorded {result.blocker_count} external reference(s) that currently block removal."
+        )
+    if result.reference_update_count:
+        typer.echo(
+            f"Prepared {result.reference_update_count} nullable foreign-key update(s) "
+            "with restoration patches."
         )
 
 

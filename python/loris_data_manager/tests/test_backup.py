@@ -9,6 +9,7 @@ from lib.db.models.dicom_archive_series import DbDicomArchiveSeries
 from lib.db.models.file import DbFile
 from lib.db.models.file_parameter import DbFileParameter
 from lib.db.models.mri_upload import DbMriUpload
+from lib.db.models.mri_violation_log import DbMriViolationLog
 from lib.db.models.parameter_type import DbParameterType
 from sqlalchemy import Column, Engine, ForeignKey, Integer, MetaData, String, Table, event, select
 from sqlalchemy.dialects import mysql
@@ -168,6 +169,116 @@ def test_dicom_backup_creates_verified_sql_manifest_and_file_artifact(
     database = cast(dict[str, object], manifest["database"])
     tables = cast(list[dict[str, object]], database["tables"])
     assert [entry["row_count"] for entry in tables] == [1, 1, 1]
+
+
+def test_dicom_backup_records_approved_reference_updates_and_restoration_sql(
+    db_engine: Engine,
+    tmp_path: Path,
+):
+    with Session(db_engine) as db:
+        archive = _add_archive(db)
+        archive_id = archive.id
+        imaging_file = DbFile(
+            session_id=1,
+            path=Path("assembly/example/native/example.mnc"),
+            output_type="native",
+            inserted_by_user_id="admin",
+            dicom_archive_id=archive.id,
+        )
+        violation = DbMriViolationLog(
+            dicom_archive_id=archive.id,
+            file_path=Path("assembly/example/violation.mnc"),
+        )
+        db.add_all((imaging_file, violation))
+        db.flush()
+        imaging_file_id = imaging_file.id
+        violation_id = violation.id
+        upload = db.scalar(
+            select(DbMriUpload).where(DbMriUpload.dicom_archive_id == archive.id)
+        )
+        assert upload is not None
+        upload_id = upload.id
+        db.commit()
+
+    archive_root = tmp_path / "archive-root"
+    archive_file = archive_root / "2026" / "archive.tar"
+    archive_file.parent.mkdir(parents=True)
+    archive_file.write_bytes(b"raw dicom archive")
+    schema = make_resource_schema()
+    update_expressions = (
+        "dicom-archive.mri-upload",
+        "dicom-archive.mri-violation",
+        "dicom-archive.imaging-file",
+    )
+    output = tmp_path / "backup"
+
+    result = create_backup(
+        db_engine,
+        schema,
+        BackupRequest(
+            output=output,
+            selection=BackupSelection(
+                selections=(parse_resource_selection(schema, "dicom-archive"),),
+                criteria=(schema.criterion("dicom-archive.id", archive_id),),
+                updates=tuple(
+                    parse_resource_selection(schema, expression)
+                    for expression in update_expressions
+                ),
+            ),
+            storage_roots={"dicom-archive": archive_root},
+        ),
+    )
+
+    assert result.blocker_count == 0
+    assert result.reference_update_count == 3
+    restore_sql = (output / "restore.sql").read_text()
+    expected_updates = (
+        f"UPDATE `mri_upload` SET `TarchiveID` = {archive_id} "
+        f"WHERE `UploadID` = {upload_id} AND `TarchiveID` IS NULL;",
+        f"UPDATE `mri_violations_log` SET `TarchiveID` = {archive_id} "
+        f"WHERE `LogID` = {violation_id} AND `TarchiveID` IS NULL;",
+        f"UPDATE `files` SET `TarchiveSource` = {archive_id} "
+        f"WHERE `FileID` = {imaging_file_id} AND `TarchiveSource` IS NULL;",
+    )
+    for statement in expected_updates:
+        assert statement in restore_sql
+        assert restore_sql.index("INSERT INTO `tarchive` ") < restore_sql.index(statement)
+
+    manifest = verify_backup(output)
+    selection = cast(dict[str, object], manifest["selection"])
+    assert selection["update"] == list(update_expressions)
+    references = cast(list[dict[str, object]], manifest["references"])
+    updated = {
+        cast(str, entry["relationship"]): entry
+        for entry in references
+        if entry["action"] == "set-null"
+    }
+    assert set(updated) == set(update_expressions)
+    assert all(entry["row_count"] == 1 for entry in updated.values())
+    assert manifest["prospective_removal"] == {
+        "blocker_count": 0,
+        "eligible": True,
+        "reference_update_count": 3,
+    }
+
+    with Session(db_engine) as db:
+        assert db.get(DbMriUpload, upload_id).dicom_archive_id == archive_id  # type: ignore[union-attr]
+        assert db.get(DbMriViolationLog, violation_id).dicom_archive_id == archive_id  # type: ignore[union-attr]
+        assert db.get(DbFile, imaging_file_id).dicom_archive_id == archive_id  # type: ignore[union-attr]
+
+
+def test_backup_rejects_an_update_without_schema_permission():
+    schema = make_resource_schema()
+
+    with pytest.raises(ValueError, match="does not permit reference updates"):
+        plan_backup(
+            schema,
+            BackupSelection(
+                selections=(parse_resource_selection(schema, "dicom-archive"),),
+                select_all=True,
+                updates=(parse_resource_selection(schema, "dicom-archive.session"),),
+            ),
+        )
 
 
 def test_backup_verification_detects_a_modified_file(db_engine: Engine, tmp_path: Path):
@@ -473,6 +584,7 @@ def test_backup_cli_requires_a_selector_and_advertises_generic_selection(tmp_pat
     assert "logical-resource backup" in help_result.output
     assert "--select" in help_result.output
     assert "--where" in help_result.output
+    assert "--update" in help_result.output
     assert "--all" in help_result.output
     assert result.exit_code == 2
     assert "At least one selector is required" in result.output
@@ -693,7 +805,7 @@ def test_backup_cli_creates_the_artifact(
             "backup",
             "--select",
             "dicom-archive",
-            "--select",
+            "--update",
             "dicom-archive.mri-upload",
             "--where",
             f"dicom-archive.id={archive_id}",
@@ -702,6 +814,7 @@ def test_backup_cli_creates_the_artifact(
 
     assert result.exit_code == 0
     assert "Created verified backup" in result.output
+    assert "Prepared 1 nullable foreign-key update" in result.output
     assert "Recorded" not in result.output
     outputs = tuple(tmp_path.glob("loris-backup-*"))
     assert len(outputs) == 1
@@ -709,6 +822,7 @@ def test_backup_cli_creates_the_artifact(
     assert (output / "manifest.json").is_file()
     manifest = verify_backup(output)
     selection = cast(dict[str, object], manifest["selection"])
-    assert selection["select"] == ["dicom-archive", "dicom-archive.mri-upload"]
-    assert selection["selected"] == {"dicom-archive": 1, "mri-upload": 1}
+    assert selection["select"] == ["dicom-archive"]
+    assert selection["update"] == ["dicom-archive.mri-upload"]
+    assert selection["selected"] == {"dicom-archive": 1}
     assert output.name == f"loris-backup-{manifest['operation_id']}"

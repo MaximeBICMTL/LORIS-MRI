@@ -21,6 +21,7 @@ from loris_data_manager.schema import (
     LoadPolicy,
     LocalPathColumnSource,
     LocalPathMapping,
+    NullableReferenceSetBinding,
     ObjectKind,
     ObjectSelection,
     OrmColumnSource,
@@ -28,6 +29,7 @@ from loris_data_manager.schema import (
     OrmMappedLinkSource,
     PropertyQuery,
     PropertyType,
+    ReferenceUpdateSemantics,
     RelationshipSemantics,
     ValueMember,
 )
@@ -128,9 +130,14 @@ DICOM_ARCHIVE_MRI_VIOLATION = LinkMember[Any](
             ObjectRef(DICOM_ARCHIVE_KIND, str(row.dicom_archive_id)),
             ObjectRef(MRI_VIOLATION_KIND, str(row.id)),
         ),
+        set_binding=NullableReferenceSetBinding(
+            source_attribute=DbDicomArchive.id,
+            target_attribute=DbMriViolationLog.dicom_archive_id,
+        ),
     ),
     traversal_semantics=RelationshipSemantics.PRODUCES,
     lifecycle=LifecycleSemantics.REFERENCES,
+    reference_update=ReferenceUpdateSemantics.SET_NULL,
     load_policy=LoadPolicy.ON_DEMAND,
 )
 MRI_VIOLATION_ROW = LinkMember[MriViolationObject](

@@ -20,6 +20,7 @@ from loris_data_manager.schema import (
     LifecycleSemantics,
     LinkMember,
     LoadPolicy,
+    NullableReferenceSetBinding,
     ObjectKind,
     ObjectSelection,
     OrmColumnSource,
@@ -27,6 +28,7 @@ from loris_data_manager.schema import (
     OrmMappedLinkSource,
     PropertyQuery,
     PropertyType,
+    ReferenceUpdateSemantics,
     RelationshipSemantics,
     ValueMember,
 )
@@ -142,9 +144,14 @@ DICOM_ARCHIVE_MRI_UPLOAD = LinkMember[Any](
             ObjectRef(DICOM_ARCHIVE_KIND, str(row.dicom_archive_id)),
             ObjectRef(MRI_UPLOAD_KIND, str(row.id)),
         ),
+        set_binding=NullableReferenceSetBinding(
+            source_attribute=DbDicomArchive.id,
+            target_attribute=DbMriUpload.dicom_archive_id,
+        ),
     ),
     traversal_semantics=RelationshipSemantics.DERIVED_FROM,
     lifecycle=LifecycleSemantics.REFERENCES,
+    reference_update=ReferenceUpdateSemantics.SET_NULL,
     load_policy=LoadPolicy.ON_DEMAND,
 )
 MRI_UPLOAD_ROW = LinkMember[MriUploadObject](

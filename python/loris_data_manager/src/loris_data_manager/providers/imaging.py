@@ -2,13 +2,14 @@
 
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+from typing import Any
 
 from lib.db.models.dicom_archive import DbDicomArchive
 from lib.db.models.file import DbFile
 from lib.db.models.file_parameter import DbFileParameter
 from lib.db.models.parameter_type import DbParameterType
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from loris_data_manager.provider import ResourceSchema
 from loris_data_manager.providers.core import DATABASE_ROW_KIND, session_link
@@ -24,6 +25,7 @@ from loris_data_manager.schema import (
     LocalPathColumnSource,
     LocalPathMapping,
     LocalPathSetBinding,
+    NullableReferenceSetBinding,
     ObjectKind,
     ObjectSelection,
     OrmColumnSource,
@@ -31,6 +33,7 @@ from loris_data_manager.schema import (
     OrmMappedLinkSource,
     PropertyQuery,
     PropertyType,
+    ReferenceUpdateSemantics,
     RelationshipSemantics,
     StorageRoot,
     ValueMember,
@@ -92,6 +95,39 @@ IMAGING_FILE_SOURCE_ARCHIVE = LinkMember[ImagingFileObject](
     traversal_semantics=RelationshipSemantics.DERIVED_FROM,
     lifecycle=LifecycleSemantics.REFERENCES,
     target_may_be_shared=True,
+)
+DICOM_ARCHIVE_IMAGING_FILE = LinkMember[Any](
+    name="imaging-file",
+    source_kind=DICOM_ARCHIVE_KIND,
+    target_kind=IMAGING_FILE_KIND,
+    source=BatchLinkSource(
+        name="load DICOM archive imaging files",
+        input_name="dicom_archive_ids",
+        statement_for_keys=lambda keys: (
+            select(DbFile)
+            .where(DbFile.dicom_archive_id.in_(keys))
+            .options(
+                load_only(
+                    DbFile.id,
+                    DbFile.dicom_archive_id,
+                    raiseload=True,
+                )
+            )
+        ),
+        input_key=lambda ref: int(ref.key) if isinstance(ref, ObjectRef) else ref,
+        target_from_row=lambda row: (
+            ObjectRef(DICOM_ARCHIVE_KIND, str(row.dicom_archive_id)),
+            ObjectRef(IMAGING_FILE_KIND, str(row.id)),
+        ),
+        set_binding=NullableReferenceSetBinding(
+            source_attribute=DbDicomArchive.id,
+            target_attribute=DbFile.dicom_archive_id,
+        ),
+    ),
+    traversal_semantics=RelationshipSemantics.DERIVED_FROM,
+    lifecycle=LifecycleSemantics.REFERENCES,
+    reference_update=ReferenceUpdateSemantics.SET_NULL,
+    load_policy=LoadPolicy.ON_DEMAND,
 )
 IMAGING_FILE_ROW = LinkMember[ImagingFileObject](
     name="row",
@@ -259,3 +295,4 @@ def register_imaging_schema(schema: ResourceSchema) -> None:
     schema.register_storage_root(StorageRoot("imaging-data", "dataDirBasePath"))
     schema.register_object_kind(IMAGING_FILE)
     schema.register_provider(ImagingFileProvider())
+    schema.register_member(DICOM_ARCHIVE_KIND, DICOM_ARCHIVE_IMAGING_FILE)

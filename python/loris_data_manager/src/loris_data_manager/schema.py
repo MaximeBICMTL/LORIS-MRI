@@ -365,6 +365,12 @@ class LifecycleSemantics(StrEnum):
     REFERENCES = "references"
 
 
+class ReferenceUpdateSemantics(StrEnum):
+    """Permitted mutation of a reference during removal of its target."""
+
+    SET_NULL = "set-null"
+
+
 @dataclass(frozen=True, slots=True)
 class StorageRoot:
     """Deployment binding for a named local-path namespace."""
@@ -479,6 +485,14 @@ class DatabaseRowSetBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class NullableReferenceSetBinding:
+    """Set-oriented mapping for rows whose nullable FK references a source object."""
+
+    source_attribute: InstrumentedAttribute[Any]
+    target_attribute: InstrumentedAttribute[Any]
+
+
+@dataclass(frozen=True, slots=True)
 class LocalPathSetBinding:
     """Set-oriented mapping from logical objects to paths stored in related rows."""
 
@@ -487,7 +501,9 @@ class LocalPathSetBinding:
     path: LocalPathMapping
 
 
-BatchSetBinding: TypeAlias = DatabaseRowSetBinding | LocalPathSetBinding
+BatchSetBinding: TypeAlias = (
+    DatabaseRowSetBinding | LocalPathSetBinding | NullableReferenceSetBinding
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -769,8 +785,32 @@ class LinkMember(Generic[ObjectT]):
     source: LinkSource[ObjectT]
     traversal_semantics: RelationshipSemantics | None = None
     lifecycle: LifecycleSemantics | None = None
+    reference_update: ReferenceUpdateSemantics | None = None
     target_may_be_shared: bool = False
     load_policy: LoadPolicy = LoadPolicy.DEFAULT
+
+    def __post_init__(self) -> None:
+        if self.reference_update is None:
+            return
+        if self.lifecycle is not LifecycleSemantics.REFERENCES:
+            raise ValueError(
+                f"Reference update policy on {self.source_kind}.{self.name} requires "
+                "references lifecycle semantics"
+            )
+        binding = (
+            self.source.set_binding if isinstance(self.source, BatchLinkSource) else None
+        )
+        if not isinstance(binding, NullableReferenceSetBinding):
+            raise ValueError(
+                f"Reference update policy on {self.source_kind}.{self.name} requires "
+                "a nullable-reference set binding"
+            )
+        column = binding.target_attribute.property.columns[0]
+        if not column.nullable:
+            raise ValueError(
+                f"Reference update policy on {self.source_kind}.{self.name} uses "
+                f"non-nullable column {column}"
+            )
 
     def targets_for_source(self, obj: ObjectT) -> tuple[ObjectRef | PhysicalObject, ...]:
         return self.source.targets(obj, self.target_kind)

@@ -44,6 +44,7 @@ from loris_data_manager import (
     OrmColumnSource,
     OrmMappedLinkSource,
     PropertyRef,
+    ReferenceUpdateSemantics,
     RelationshipSemantics,
     ResourceGraph,
     ResourceModel,
@@ -82,6 +83,7 @@ from loris_data_manager.providers.dicom import (
     register_dicom_schema,
 )
 from loris_data_manager.providers.imaging import (
+    DICOM_ARCHIVE_IMAGING_FILE,
     IMAGING_FILE,
     IMAGING_FILE_SOURCE_ARCHIVE,
     ImagingFileObject,
@@ -454,6 +456,27 @@ def test_resolves_imaging_file_with_owned_resources_and_descriptive_provenance(d
     } == {LifecycleSemantics.OWNS, LifecycleSemantics.REFERENCES}
     assert IMAGING_FILE_SOURCE_ARCHIVE.traversal_semantics is RelationshipSemantics.DERIVED_FROM
     assert IMAGING_FILE_SOURCE_ARCHIVE.lifecycle is LifecycleSemantics.REFERENCES
+
+
+def test_inspection_projects_archive_imaging_files_on_demand(db: Session):
+    archive = add_dicom_archive(db)
+    imaging_file = add_imaging_file(db, archive)
+
+    result = inspect_resources(
+        db,
+        make_schema(),
+        InspectionQuery(
+            selections=(inspection_selection("dicom-archive.imaging-file.id"),),
+            criteria=parse_where_expressions((f"dicom-archive.id={archive.id}",)),
+        ),
+    )
+
+    assert result.selected == {ObjectRef(IMAGING_FILE.name, str(imaging_file.id))}
+    assert DICOM_ARCHIVE_IMAGING_FILE.lifecycle is LifecycleSemantics.REFERENCES
+    assert (
+        DICOM_ARCHIVE_IMAGING_FILE.reference_update
+        is ReferenceUpdateSemantics.SET_NULL
+    )
 
 
 def test_inspection_projects_imaging_file_source_archive(db: Session):
@@ -1908,6 +1931,7 @@ def test_inspection_can_expand_related_session_and_render_text_and_json(db: Sess
     assert "file [owns] -> local-path:dicom-archive:2026/archive.tar" in text
     assert "series-row [owns; on-demand]: not loaded" in text
     assert "file-row [owns; on-demand]: not loaded" in text
+    assert "imaging-file [references; on-demand]: not loaded" in text
     assert "mri-upload [references; on-demand]: not loaded" in text
     assert "mri-violation [references; on-demand]: not loaded" in text
 
@@ -1930,6 +1954,7 @@ def test_inspection_can_expand_related_session_and_render_text_and_json(db: Sess
     assert archive_document["unloaded"]["links"] == [
         "series-row",
         "file-row",
+        "imaging-file",
         "mri-upload",
         "mri-violation",
     ]

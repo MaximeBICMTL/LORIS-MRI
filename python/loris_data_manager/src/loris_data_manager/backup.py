@@ -27,6 +27,7 @@ from sqlalchemy.sql import Select
 from loris_data_manager.projection import (
     ProjectionPlan,
     ResourceQuery,
+    ResourceSelection,
     execute_projection,
     plan_resource_query,
 )
@@ -38,12 +39,14 @@ from loris_data_manager.schema import (
     LifecycleSemantics,
     LocalPathColumnSource,
     LocalPathSetBinding,
+    NullableReferenceSetBinding,
     OrmEntitySource,
+    ReferenceUpdateSemantics,
     local_path_mapping,
 )
 
 BACKUP_FORMAT = "loris-resource-backup"
-BACKUP_FORMAT_VERSION = 2
+BACKUP_FORMAT_VERSION = 3
 COPY_BUFFER_SIZE = 1024 * 1024
 ROW_BATCH_SIZE = 500
 MYSQL_RESTORE_DIALECT = mysql.dialect(paramstyle="named")
@@ -54,6 +57,7 @@ class BackupSelection(ResourceQuery):
     """Shared semantic projections plus their original CLI predicates."""
 
     where_expressions: tuple[str, ...] = ()
+    updates: tuple[ResourceSelection, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +80,7 @@ class BackupResult:
     database_row_count: int
     file_count: int
     blocker_count: int
+    reference_update_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +122,16 @@ class DatabaseReferenceCheck:
     statement: Select[Any]
     reference_columns: tuple[Column[Any], ...]
     action: str
+    relationship: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DatabaseReferenceUpdate:
+    """Approved update of rows that reference a selected logical object."""
+
+    relationship: str
+    parent_column: Column[Any]
+    child_column: Column[Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +155,7 @@ class BackupPlan:
     tables: tuple[DatabaseTableBackup, ...]
     files: tuple[FileCollectionBackup, ...] = ()
     references: tuple[DatabaseReferenceCheck, ...] = ()
+    reference_updates: tuple[DatabaseReferenceUpdate, ...] = ()
 
     def __post_init__(self) -> None:
         selected_tables = sum(table.counts_selected_objects for table in self.tables)
@@ -172,6 +188,7 @@ def plan_backup(
                 f"Backup selection {selected.expression!r} does not end at a logical object "
                 "with a registered provider"
             )
+    _validated_reference_updates(schema, selection)
     return plan_resource_query(
         schema,
         selection,
@@ -179,11 +196,53 @@ def plan_backup(
     )
 
 
+def _validated_reference_updates(
+    schema: ResourceSchema,
+    selection: BackupSelection,
+) -> tuple[tuple[str, NullableReferenceSetBinding], ...]:
+    """Resolve explicitly requested, schema-approved direct reference updates."""
+
+    selected_roots = {
+        selected.target_kind
+        for selected in selection.selections
+        if not selected.path.link_members and selected.path.property is None
+    }
+    resolved: list[tuple[str, NullableReferenceSetBinding]] = []
+    seen: set[str] = set()
+    for requested in selection.updates:
+        if requested.expression in seen:
+            raise ValueError(f"Reference update {requested.expression!r} was requested twice")
+        seen.add(requested.expression)
+        if requested.path.property is not None or len(requested.path.link_members) != 1:
+            raise ValueError(
+                f"Reference update {requested.expression!r} must name one direct relationship"
+            )
+        if requested.path.root_kind not in selected_roots:
+            raise ValueError(
+                f"Reference update {requested.expression!r} requires selecting its source "
+                f"object {requested.path.root_kind!r}"
+            )
+        link = schema.path_links(requested.path)[0]
+        if link.reference_update is not ReferenceUpdateSemantics.SET_NULL:
+            raise ValueError(
+                f"Relationship {requested.expression!r} does not permit reference updates"
+            )
+        source = link.source
+        binding = source.set_binding if isinstance(source, BatchLinkSource) else None
+        if not isinstance(binding, NullableReferenceSetBinding):
+            raise ValueError(
+                f"Relationship {requested.expression!r} has no nullable-reference binding"
+            )
+        resolved.append((requested.expression, binding))
+    return tuple(resolved)
+
+
 def _plan_backup_for_identities(
     connection: Connection,
     schema: ResourceSchema,
     kind: str,
     identities: tuple[object, ...],
+    reference_updates: tuple[tuple[str, NullableReferenceSetBinding], ...] = (),
 ) -> BackupPlan:
     """Plan a closure from the immutable identities selected by a locking read."""
 
@@ -196,6 +255,7 @@ def _plan_backup_for_identities(
         schema,
         kind,
         selected_statement,
+        reference_updates=reference_updates,
         inspect_dependencies=False,
     )
 
@@ -206,6 +266,7 @@ def _plan_backup_from_selection(
     kind: str,
     selected_statement: Select[Any],
     *,
+    reference_updates: tuple[tuple[str, NullableReferenceSetBinding], ...] = (),
     inspect_dependencies: bool = True,
 ) -> BackupPlan:
     """Lower one anchor selection statement to its physical ownership closure."""
@@ -231,6 +292,20 @@ def _plan_backup_from_selection(
     tables: list[DatabaseTableBackup] = []
     anchor_files: list[FileBackup] = []
     file_collections: list[FileCollectionBackup] = []
+    database_reference_updates: list[DatabaseReferenceUpdate] = []
+
+    for relationship, binding in reference_updates:
+        if binding.source_attribute.class_ is not provider.orm_model:
+            raise ValueError(
+                f"Reference update {relationship!r} does not belong to provider {kind!r}"
+            )
+        database_reference_updates.append(
+            DatabaseReferenceUpdate(
+                relationship=relationship,
+                parent_column=_mapped_column(binding.source_attribute),
+                child_column=_mapped_column(binding.target_attribute),
+            )
+        )
 
     for link in schema.links(kind):
         if link.lifecycle is LifecycleSemantics.OWNS:
@@ -316,6 +391,7 @@ def _plan_backup_from_selection(
         ordered_tables, references = _inspect_database_dependencies(
             connection,
             tuple(tables),
+            tuple(database_reference_updates),
         )
     else:
         ordered_tables = tuple(tables)
@@ -326,6 +402,7 @@ def _plan_backup_from_selection(
         tables=ordered_tables,
         files=tuple(file_collections),
         references=tuple(references),
+        reference_updates=tuple(database_reference_updates),
     )
 
 
@@ -441,6 +518,7 @@ def _single_primary_key(table: Table, kind: str) -> Column[Any]:
 def _inspect_database_dependencies(
     connection: Connection,
     plans: tuple[DatabaseTableBackup, ...],
+    reference_updates: tuple[DatabaseReferenceUpdate, ...] = (),
 ) -> tuple[tuple[DatabaseTableBackup, ...], list[DatabaseReferenceCheck]]:
     """Reflect authoritative FKs and separate internal dependencies from blockers."""
 
@@ -464,6 +542,26 @@ def _inspect_database_dependencies(
     ] = set()
     references: list[DatabaseReferenceCheck] = []
     metadata = MetaData()
+    updates_by_fk: dict[
+        tuple[
+            tuple[str | None, str],
+            tuple[str, ...],
+            tuple[str | None, str],
+            tuple[str, ...],
+        ],
+        DatabaseReferenceUpdate,
+    ] = {}
+    for update_plan in reference_updates:
+        update_key = (
+            key(update_plan.child_column.table.schema, update_plan.child_column.table.name),
+            (update_plan.child_column.name,),
+            key(update_plan.parent_column.table.schema, update_plan.parent_column.table.name),
+            (update_plan.parent_column.name,),
+        )
+        if update_key in updates_by_fk:
+            raise ValueError(f"Reference update {update_plan.relationship!r} duplicates another update")
+        updates_by_fk[update_key] = update_plan
+    matched_updates: set[str] = set()
 
     # Deliberately inspect the connected database rather than ORM metadata. Custom
     # deployment tables are part of the safety inventory even when Python has no model.
@@ -482,9 +580,8 @@ def _inspect_database_dependencies(
             if len(constrained_names) != len(referred_names):
                 raise ValueError(f"Foreign key on {source_name!r} has mismatched columns")
             target_key = key(foreign_key.get("referred_schema"), referred_table)
-            reflected_foreign_keys.add(
-                (source_key, constrained_names, target_key, referred_names)
-            )
+            foreign_key_key = (source_key, constrained_names, target_key, referred_names)
+            reflected_foreign_keys.add(foreign_key_key)
             target_plan = by_table.get(target_key)
             if target_plan is None:
                 continue
@@ -543,12 +640,23 @@ def _inspect_database_dependencies(
                     )
                 )
             statement = statement.order_by(*reflected_source.primary_key.columns)
+            approved_update = updates_by_fk.get(foreign_key_key)
+            if approved_update is not None:
+                if len(source_columns) != 1 or not source_columns[0].nullable:
+                    raise ValueError(
+                        f"Reference update {approved_update.relationship!r} does not use a "
+                        "nullable single-column foreign key"
+                    )
+                matched_updates.add(approved_update.relationship)
             references.append(
                 DatabaseReferenceCheck(
                     table=reflected_source,
                     statement=statement,
                     reference_columns=source_columns,
-                    action="block",
+                    action="set-null" if approved_update is not None else "block",
+                    relationship=(
+                        approved_update.relationship if approved_update is not None else None
+                    ),
                 )
             )
 
@@ -569,6 +677,15 @@ def _inspect_database_dependencies(
                 f"{ownership.parent_column.table.fullname}."
                 f"{ownership.parent_column.name}"
             )
+
+    missing_updates = {
+        update.relationship for update in reference_updates
+    } - matched_updates
+    if missing_updates:
+        raise ValueError(
+            "Reference updates are not protected by matching database foreign keys: "
+            f"{sorted(missing_updates)}"
+        )
 
     return _order_database_tables(plans, by_table, dependencies), references
 
@@ -638,12 +755,16 @@ def _combine_backup_plans(
     ordered_tables, references = _inspect_database_dependencies(
         connection,
         combined_tables,
+        tuple(update for plan in plans for update in plan.reference_updates),
     )
     return BackupPlan(
         kinds=tuple(dict.fromkeys(kind for plan in plans for kind in plan.kinds)),
         tables=ordered_tables,
         files=tuple(file for plan in plans for file in plan.files),
         references=tuple(references),
+        reference_updates=tuple(
+            update for plan in plans for update in plan.reference_updates
+        ),
     )
 
 
@@ -751,6 +872,11 @@ def create_backup(
 
     selection = request.selection
     semantic_plan = plan_backup(schema, selection)
+    validated_updates = _validated_reference_updates(schema, selection)
+    updates_by_kind: dict[str, list[tuple[str, NullableReferenceSetBinding]]] = {}
+    for relationship, binding in validated_updates:
+        source_kind = schema.projection_path(relationship).root_kind
+        updates_by_kind.setdefault(source_kind, []).append((relationship, binding))
     selected_kinds = tuple(
         dict.fromkeys(selected.target_kind for selected in selection.selections)
     )
@@ -819,11 +945,13 @@ def create_backup(
                             schema,
                             kind,
                             tuple(_identity_values(schema, kind, refs)),
+                            tuple(updates_by_kind.get(kind, ())),
                         )
                         for kind, refs in refs_by_kind.items()
                     )
                     plan = _combine_backup_plans(connection, physical_plans)
 
+                    reference_entries: tuple[dict[str, object], ...]
                     with sql_path.open("w", encoding="utf-8", newline="\n") as restore_sql:
                         restore_sql.write(
                             "-- LORIS logical-resource restoration patch\n"
@@ -844,20 +972,27 @@ def create_backup(
                             pending_files.extend(files)
                         for file_plan in plan.files:
                             pending_files.extend(_read_file_collection(db, file_plan))
+                        reference_entries = tuple(
+                            _write_database_reference(db, reference, restore_sql)
+                            for reference in plan.references
+                        )
                         restore_sql.write("COMMIT;\n")
                         restore_sql.flush()
                         os.fsync(restore_sql.fileno())
-
-                    reference_entries = tuple(
-                        _describe_references(db, reference) for reference in plan.references
-                    )
 
                     # Keep database locks until every backup payload is written and
                     # verified. A future delete can run immediately after this point
                     # in the same transaction without a row-level time-of-check gap.
                     file_entries = _copy_files(request.storage_roots, staging, pending_files)
                     blocker_count = sum(
-                        cast(int, entry["row_count"]) for entry in reference_entries
+                        cast(int, entry["row_count"])
+                        for entry in reference_entries
+                        if entry["action"] == "block"
+                    )
+                    reference_update_count = sum(
+                        cast(int, entry["row_count"])
+                        for entry in reference_entries
+                        if entry["action"] == "set-null"
                     )
                     manifest: dict[str, object] = {
                         "format": BACKUP_FORMAT,
@@ -884,6 +1019,16 @@ def create_backup(
                                 "matched_count": len(projection.matched),
                             },
                             "selected": selected_object_counts,
+                            **(
+                                {
+                                    "update": [
+                                        requested.expression
+                                        for requested in selection.updates
+                                    ]
+                                }
+                                if selection.updates
+                                else {}
+                            ),
                         },
                         "database": {
                             "dialect": "mysql",
@@ -897,6 +1042,11 @@ def create_backup(
                         "prospective_removal": {
                             "eligible": blocker_count == 0,
                             "blocker_count": blocker_count,
+                            **(
+                                {"reference_update_count": reference_update_count}
+                                if reference_update_count
+                                else {}
+                            ),
                         },
                     }
                     manifest_path = staging / "manifest.json"
@@ -927,6 +1077,7 @@ def create_backup(
         database_row_count=database_row_count,
         file_count=len(file_entries),
         blocker_count=blocker_count,
+        reference_update_count=reference_update_count,
     )
 
 
@@ -1029,26 +1180,42 @@ def _write_database_table(
     )
 
 
-def _describe_references(
+def _write_database_reference(
     db: Session,
     plan: DatabaseReferenceCheck,
+    restore_sql: TextIO,
 ) -> dict[str, object]:
     digest = hashlib.sha256()
     row_count = 0
     result = db.execute(
         plan.statement.with_for_update().execution_options(yield_per=ROW_BATCH_SIZE)
     ).mappings()
+    primary_key = tuple(plan.table.primary_key.columns)
+    if plan.action == "set-null":
+        if not primary_key:
+            raise ValueError(
+                f"Cannot restore updated references in {plan.table.fullname!r} "
+                "without a primary key"
+            )
+        restore_sql.write(f"-- restore {plan.relationship}\n")
     for row in result:
         values = {column.key: row[column.key] for column in plan.table.columns}
         _update_row_digest(digest, plan.table, values)
+        if plan.action == "set-null":
+            restore_sql.write(f"{_render_reference_update(plan, values, primary_key)};\n")
         row_count += 1
-    return {
+    if plan.action == "set-null":
+        restore_sql.write("\n")
+    entry: dict[str, object] = {
         "table": plan.table.fullname,
         "columns": [column.name for column in plan.reference_columns],
         "action": plan.action,
         "row_count": row_count,
         "content_sha256": digest.hexdigest(),
     }
+    if plan.relationship is not None:
+        entry["relationship"] = plan.relationship
+    return entry
 
 
 def _read_file_collection(
@@ -1179,15 +1346,49 @@ def _canonical_value(value: object) -> object:
 
 def _render_insert(table: Table, values: Mapping[str, object]) -> str:
     preparer = MYSQL_RESTORE_DIALECT.identifier_preparer
-    table_name = preparer.quote_identifier(table.name)
-    if table.schema is not None:
-        table_name = f"{preparer.quote_identifier(table.schema)}.{table_name}"
+    table_name = _quoted_table_name(table)
     columns = ", ".join(preparer.quote_identifier(column.name) for column in table.columns)
     literals = ", ".join(
         _sql_literal(column, values[column.key], MYSQL_RESTORE_DIALECT)
         for column in table.columns
     )
     return f"INSERT INTO {table_name} ({columns}) VALUES ({literals})"
+
+
+def _render_reference_update(
+    plan: DatabaseReferenceCheck,
+    values: Mapping[str, object],
+    primary_key: tuple[Column[Any], ...],
+) -> str:
+    """Render a guarded restoration update for references cleared during removal."""
+
+    preparer = MYSQL_RESTORE_DIALECT.identifier_preparer
+    assignments = ", ".join(
+        f"{preparer.quote_identifier(column.name)} = "
+        f"{_sql_literal(column, values[column.key], MYSQL_RESTORE_DIALECT)}"
+        for column in plan.reference_columns
+    )
+    identity = " AND ".join(
+        f"{preparer.quote_identifier(column.name)} = "
+        f"{_sql_literal(column, values[column.key], MYSQL_RESTORE_DIALECT)}"
+        for column in primary_key
+    )
+    cleared = " AND ".join(
+        f"{preparer.quote_identifier(column.name)} IS NULL"
+        for column in plan.reference_columns
+    )
+    return (
+        f"UPDATE {_quoted_table_name(plan.table)} SET {assignments} "
+        f"WHERE {identity} AND {cleared}"
+    )
+
+
+def _quoted_table_name(table: Table) -> str:
+    preparer = MYSQL_RESTORE_DIALECT.identifier_preparer
+    table_name = preparer.quote_identifier(table.name)
+    if table.schema is not None:
+        table_name = f"{preparer.quote_identifier(table.schema)}.{table_name}"
+    return table_name
 
 
 def _sql_literal(column: Column[Any], value: object, dialect: Dialect) -> str:
