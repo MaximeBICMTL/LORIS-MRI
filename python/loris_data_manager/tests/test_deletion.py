@@ -231,6 +231,39 @@ def test_deletion_creates_backup_clears_references_and_removes_owned_resources(
         assert db.scalar(select(func.count()).select_from(DbDicomArchiveFile)) == 0
 
 
+def test_deletion_skips_a_missing_managed_path_and_warns(
+    db_engine: Engine,
+    tmp_path: Path,
+):
+    with Session(db_engine) as db:
+        archive = _add_archive(db)
+        archive_id = archive.id
+        db.commit()
+    archive_root = tmp_path / "archive-root"
+    archive_root.mkdir()
+    source = archive_root / "2026" / "archive.tar"
+    output = tmp_path / "backup"
+
+    result = delete_resources(
+        db_engine,
+        make_resource_schema(),
+        _request(
+            archive_root,
+            output,
+            archive_id=archive_id,
+            update_upload=True,
+        ),
+    )
+
+    assert result.warnings == (f"Expected managed path is missing: {source}",)
+    assert result.quarantine_purged
+    assert not (archive_root / QUARANTINE_DIRECTORY).exists()
+    manifest = verify_backup(output)
+    assert manifest["warnings"] == list(result.warnings)
+    with Session(db_engine) as db:
+        assert db.get(DbDicomArchive, archive_id) is None
+
+
 def test_blocked_deletion_fails_before_backup_and_retains_live_resources(
     db_engine: Engine,
     tmp_path: Path,
@@ -484,3 +517,59 @@ def test_deletion_cli_defaults_to_dry_run_and_advertises_execute(
     assert help_result.exit_code == 0
     assert "--execute" in help_result.output
     assert "backup-first DICOM archive deletion" in help_result.output
+
+
+def test_deletion_cli_warns_without_blocking_for_a_missing_path(
+    db_engine: Engine,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with Session(db_engine) as db:
+        archive = _add_archive(db)
+        archive_id = archive.id
+        db.commit()
+    archive_root = tmp_path / "archive-root"
+    archive_root.mkdir()
+    source = archive_root / "2026" / "archive.tar"
+    output = tmp_path / "backup"
+
+    def load_config_without_io(profile: str | None) -> SimpleNamespace:
+        del profile
+        return SimpleNamespace(mysql=object())
+
+    def use_test_engine(config: object) -> Engine:
+        del config
+        return db_engine
+
+    def archive_root_config(db: Session, name: str) -> SimpleNamespace:
+        del db, name
+        return SimpleNamespace(value=str(archive_root))
+
+    monkeypatch.setattr(cli_module, "load_config", load_config_without_io)
+    monkeypatch.setattr(cli_module, "get_database_engine", use_test_engine)
+    monkeypatch.setattr(
+        cli_module,
+        "try_get_config_with_setting_name",
+        archive_root_config,
+    )
+
+    result = CliRunner().invoke(
+        app,
+        (
+            "delete",
+            "--select",
+            "dicom-archive",
+            "--update",
+            "dicom-archive.mri-upload",
+            "--where",
+            f"dicom-archive.id={archive_id}",
+            "--output",
+            str(output),
+            "--execute",
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert "Deleted 1 DICOM archive" in result.output
+    assert f"Warning: Expected managed path is missing: {source}" in result.output
+    assert output.is_dir()

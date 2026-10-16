@@ -47,7 +47,7 @@ from loris_data_manager.schema import (
 )
 
 BACKUP_FORMAT = "loris-resource-backup"
-BACKUP_FORMAT_VERSION = 4
+BACKUP_FORMAT_VERSION = 5
 COPY_BUFFER_SIZE = 1024 * 1024
 ROW_BATCH_SIZE = 500
 MYSQL_RESTORE_DIALECT = mysql.dialect(paramstyle="named")
@@ -82,6 +82,7 @@ class BackupResult:
     file_count: int
     blocker_count: int
     reference_update_count: int
+    warnings: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1164,7 +1165,9 @@ def create_backup_with_action(
                     # Keep database locks until every backup payload is written and
                     # verified. A transaction action can run immediately afterward
                     # without a row-level time-of-check gap.
-                    file_entries = _copy_files(request.storage_roots, staging, pending_files)
+                    file_entries, backup_warnings = _copy_files(
+                        request.storage_roots, staging, pending_files
+                    )
                     manifest: dict[str, object] = {
                         "format": BACKUP_FORMAT,
                         "format_version": BACKUP_FORMAT_VERSION,
@@ -1209,6 +1212,7 @@ def create_backup_with_action(
                             "tables": table_entries,
                         },
                         "files": file_entries,
+                        "warnings": list(backup_warnings),
                         "references": list(reference_entries),
                         "prospective_removal": {
                             "eligible": blocker_count == 0,
@@ -1244,6 +1248,7 @@ def create_backup_with_action(
                         file_count=len(file_entries),
                         blocker_count=blocker_count,
                         reference_update_count=reference_update_count,
+                        warnings=backup_warnings,
                     )
                     if action is not None:
                         action.apply(
@@ -1286,6 +1291,13 @@ def verify_backup(path: Path) -> Mapping[str, object]:
     if manifest.get("format") != BACKUP_FORMAT or manifest.get("format_version") != BACKUP_FORMAT_VERSION:
         raise ValueError("Unsupported resource backup format")
 
+    loaded_warnings = manifest.get("warnings")
+    if not isinstance(loaded_warnings, list):
+        raise ValueError("Backup manifest has an invalid warning list")
+    warnings = cast(list[object], loaded_warnings)
+    if not all(isinstance(warning, str) for warning in warnings):
+        raise ValueError("Backup manifest has an invalid warning list")
+
     loaded_database = manifest.get("database")
     if not isinstance(loaded_database, dict):
         raise ValueError("Backup manifest has no database payload")
@@ -1305,6 +1317,13 @@ def verify_backup(path: Path) -> Mapping[str, object]:
             raise ValueError("Backup manifest has an invalid file entry")
         entry = cast(dict[str, object], loaded_entry)
         path_type = entry.get("path_type")
+        if path_type == "missing":
+            if any(
+                name in entry
+                for name in ("payload", "sha256", "size", "link_target")
+            ):
+                raise ValueError("Backup manifest has an invalid missing-path entry")
+            continue
         payload = entry.get("payload")
         digest = entry.get("sha256")
         size = entry.get("size")
@@ -1464,8 +1483,9 @@ def _copy_files(
     storage_roots: Mapping[str, Path],
     staging: Path,
     pending_files: list[_PendingFile],
-) -> list[dict[str, object]]:
+) -> tuple[list[dict[str, object]], tuple[str, ...]]:
     entries: list[dict[str, object]] = []
+    warnings: list[str] = []
     seen: set[tuple[str, PurePosixPath]] = set()
     for pending in pending_files:
         identity = (pending.storage_root, pending.relative_path)
@@ -1481,10 +1501,24 @@ def _copy_files(
         destination.parent.mkdir(parents=True, exist_ok=True)
         try:
             source_metadata = source.lstat()
+        except FileNotFoundError:
+            warnings.append(f"Expected managed path is missing: {source}")
+            entries.append(
+                {
+                    "object": {"kind": pending.object_kind, "id": pending.object_id},
+                    "storage_root": pending.storage_root,
+                    "relative_path": str(pending.relative_path),
+                    "path_type": "missing",
+                }
+            )
+            continue
         except OSError as error:
             raise ValueError(f"Cannot inspect backup source file {source}") from error
         if stat.S_ISLNK(source_metadata.st_mode):
             size, digest, link_target = _copy_verified_symlink(source, destination)
+            target_warning = _symlink_target_warning(source, link_target)
+            if target_warning is not None:
+                warnings.append(target_warning)
             path_metadata: dict[str, object] = {
                 "path_type": "symlink",
                 "link_target": link_target,
@@ -1505,7 +1539,17 @@ def _copy_files(
                 "sha256": digest,
             }
         )
-    return entries
+    return entries, tuple(warnings)
+
+
+def _symlink_target_warning(source: Path, link_target: str) -> str | None:
+    try:
+        source.stat()
+    except FileNotFoundError:
+        return f"Symbolic-link target is missing: {source} -> {link_target}"
+    except OSError as error:
+        return f"Cannot inspect symbolic-link target for {source}: {error}"
+    return None
 
 
 def _copy_verified_regular_file(source: Path, destination: Path) -> tuple[int, str]:

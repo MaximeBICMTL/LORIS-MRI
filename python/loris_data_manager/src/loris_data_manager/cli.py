@@ -276,6 +276,8 @@ def backup(
         "logical object(s): "
         f"{result.database_row_count} database row(s), {result.file_count} file(s)."
     )
+    for warning in result.warnings:
+        typer.echo(f"Warning: {warning}", err=True)
     if result.blocker_count:
         typer.echo(
             f"Recorded {result.blocker_count} external reference(s) that currently block removal."
@@ -424,6 +426,8 @@ def delete_command(
         f"{result.backup.file_count} file(s)."
     )
     typer.echo(f"Created verified backup {result.backup.output}.")
+    for warning in result.warnings:
+        typer.echo(f"Warning: {warning}", err=True)
     if result.updated_reference_count:
         typer.echo(
             f"Cleared {result.updated_reference_count} approved nullable reference(s)."

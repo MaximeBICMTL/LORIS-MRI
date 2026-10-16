@@ -639,6 +639,75 @@ def test_backup_preserves_an_archive_symlink_without_copying_its_target(
         verify_backup(output)
 
 
+def test_backup_records_a_missing_managed_path_and_warns(
+    db_engine: Engine,
+    tmp_path: Path,
+):
+    with Session(db_engine) as db:
+        archive = _add_archive(db)
+        archive_id = archive.id
+        db.commit()
+    archive_root = tmp_path / "archive-root"
+    archive_root.mkdir()
+    output = tmp_path / "backup"
+    schema = make_resource_schema()
+
+    result = _create_archive_backup(
+        db_engine,
+        output,
+        archive_root,
+        (schema.criterion("dicom-archive.id", archive_id),),
+    )
+
+    assert result.file_count == 1
+    assert result.warnings == (
+        f"Expected managed path is missing: {archive_root / '2026/archive.tar'}",
+    )
+    manifest = verify_backup(output)
+    assert manifest["warnings"] == list(result.warnings)
+    files = cast(list[dict[str, object]], manifest["files"])
+    assert files == [
+        {
+            "object": {"id": str(archive_id), "kind": "dicom-archive"},
+            "path_type": "missing",
+            "relative_path": "2026/archive.tar",
+            "storage_root": "dicom-archive",
+        }
+    ]
+
+
+def test_backup_preserves_a_dangling_symlink_and_warns(
+    db_engine: Engine,
+    tmp_path: Path,
+):
+    with Session(db_engine) as db:
+        archive = _add_archive(db)
+        archive_id = archive.id
+        db.commit()
+    archive_root = tmp_path / "archive-root"
+    source = archive_root / "2026" / "archive.tar"
+    source.parent.mkdir(parents=True)
+    missing_target = tmp_path / "missing-target.tar"
+    source.symlink_to(missing_target)
+    output = tmp_path / "backup"
+    schema = make_resource_schema()
+
+    result = _create_archive_backup(
+        db_engine,
+        output,
+        archive_root,
+        (schema.criterion("dicom-archive.id", archive_id),),
+    )
+
+    assert result.warnings == (
+        f"Symbolic-link target is missing: {source} -> {missing_target}",
+    )
+    payload = output / "files" / "dicom-archive" / "2026" / "archive.tar"
+    assert payload.is_symlink()
+    assert payload.readlink() == missing_target
+    verify_backup(output)
+
+
 def test_backup_rejects_an_empty_selection(db_engine: Engine, tmp_path: Path):
     schema = make_resource_schema()
     output = tmp_path / "backup"
@@ -869,7 +938,6 @@ def test_backup_cli_creates_the_artifact(
     archive_root = tmp_path / "archive-root"
     archive_file = archive_root / "2026" / "archive.tar"
     archive_file.parent.mkdir(parents=True)
-    archive_file.write_bytes(b"raw dicom archive")
     monkeypatch.chdir(tmp_path)
 
     def load_config_without_io(profile: str | None) -> SimpleNamespace:
@@ -904,6 +972,7 @@ def test_backup_cli_creates_the_artifact(
 
     assert result.exit_code == 0
     assert "Created verified backup" in result.output
+    assert f"Warning: Expected managed path is missing: {archive_file}" in result.output
     assert "Prepared 1 nullable foreign-key update" in result.output
     assert "Recorded" not in result.output
     outputs = tuple(tmp_path.glob("loris-backup-*"))

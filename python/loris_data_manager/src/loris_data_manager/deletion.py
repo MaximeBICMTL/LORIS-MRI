@@ -58,6 +58,7 @@ class DeletionResult:
     updated_reference_count: int
     quarantine_purged: bool
     cleanup_paths: tuple[Path, ...]
+    warnings: tuple[str, ...]
 
 
 def plan_deletion(
@@ -95,6 +96,7 @@ def delete_resources(
         updated_reference_count=action.updated_reference_count,
         quarantine_purged=not action.cleanup_paths,
         cleanup_paths=tuple(action.cleanup_paths),
+        warnings=tuple(dict.fromkeys((*backup.warnings, *action.warnings))),
     )
 
 
@@ -126,6 +128,7 @@ class _DicomArchiveDeletion(BackupTransactionAction):
         self.deleted_database_row_count = 0
         self.updated_reference_count = 0
         self.cleanup_paths: list[Path] = []
+        self.warnings: list[str] = []
         self._moved: list[tuple[Path, Path]] = []
         self._quarantine_roots: dict[str, Path] = {}
 
@@ -185,13 +188,33 @@ class _DicomArchiveDeletion(BackupTransactionAction):
             path_type = entry.get("path_type")
             digest = entry.get("sha256")
             size = entry.get("size")
-            if (
-                path_type not in {"regular-file", "symlink"}
-                or not isinstance(digest, str)
-                or not isinstance(size, int)
-            ):
+            if path_type not in {"missing", "regular-file", "symlink"}:
                 raise RuntimeError("Verified backup has invalid file metadata")
             source = root.joinpath(*relative.parts)
+            try:
+                source.lstat()
+            except FileNotFoundError:
+                self.warnings.append(f"Expected managed path is missing: {source}")
+                continue
+            except OSError as error:
+                raise ValueError(f"Cannot inspect deletion source {source}") from error
+            if path_type == "missing":
+                raise ValueError(
+                    f"Managed path appeared after its backup recorded it missing: {source}"
+                )
+            if not isinstance(digest, str) or not isinstance(size, int):
+                raise RuntimeError("Verified backup has invalid file metadata")
+            link_target: str | None = None
+            if path_type == "symlink":
+                loaded_link_target = entry.get("link_target")
+                if not isinstance(loaded_link_target, str):
+                    raise RuntimeError(
+                        "Verified backup has invalid symbolic-link metadata"
+                    )
+                link_target = loaded_link_target
+                target_warning = _symlink_target_warning(source)
+                if target_warning is not None:
+                    self.warnings.append(target_warning)
             quarantine_root = self._quarantine_root(
                 pending.storage_root,
                 root,
@@ -210,9 +233,7 @@ class _DicomArchiveDeletion(BackupTransactionAction):
                     moved=self._moved,
                 )
             else:
-                link_target = entry.get("link_target")
-                if not isinstance(link_target, str):
-                    raise RuntimeError("Verified backup has invalid symbolic-link metadata")
+                assert link_target is not None
                 _quarantine_verified_symlink(
                     source,
                     destination,
@@ -323,6 +344,20 @@ def _require_real_path(root: Path, relative: PurePosixPath) -> None:
             raise ValueError(f"Cannot inspect managed path component {current}") from error
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
             raise ValueError(f"Managed path component is not a real directory: {current}")
+
+
+def _symlink_target_warning(source: Path) -> str | None:
+    try:
+        link_target = os.readlink(source)
+    except OSError:
+        return None
+    try:
+        source.stat()
+    except FileNotFoundError:
+        return f"Symbolic-link target is missing: {source} -> {link_target}"
+    except OSError as error:
+        return f"Cannot inspect symbolic-link target for {source}: {error}"
+    return None
 
 
 def _quarantine_verified_file(

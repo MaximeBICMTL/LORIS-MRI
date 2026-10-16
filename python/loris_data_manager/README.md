@@ -25,8 +25,9 @@ The intended execution sequence is:
    that will be deleted or updated, and fail on unapproved references.
 4. Copy all owned filesystem entries and serialize all deleted rows and reference-restoration
    patches into a durable backup. Regular files are copied by value; symbolic links are preserved
-   shallowly without reading their targets. Finalize and verify that artifact before any
-   destructive change.
+   shallowly without reading their targets. An expected path that is already absent is recorded
+   as missing rather than given a payload. Finalize and verify that artifact before any destructive
+   change.
 5. Apply approved nullable-reference updates, then delete owned database rows child-to-parent,
    checking exact affected-row counts. Do not commit yet.
 6. Atomically rename each live file or symbolic link into an operation-specific quarantine
@@ -87,12 +88,16 @@ the referenced archive. All reflected foreign keys not covered by owned rows or 
 requested update remain blockers.
 
 The deletion CLI defaults to dry-run and requires the conspicuous `--execute` flag. Empty or broad
-selections retain the existing `--all` guard. Missing, changed, unexpected, or unsafe paths;
-mismatched row counts; new blockers; and revalidation failures all fail closed. Deletion currently
-supports a symbolic link only as the final managed path component. It preserves that link in the
-backup and moves and purges the link itself; it never reads, writes, or removes the target.
-Symbolic links in intermediate path components remain unsupported because operating below one
-would cross the configured storage-root path boundary.
+selections retain the existing `--all` guard. For the current testing phase, an expected managed
+path or symbolic-link target that is missing produces a warning but does not block backup or
+deletion. A missing path is represented explicitly in the backup manifest without a payload;
+deletion skips it, but fails if it appears after that capture because the new object was not backed
+up. Changed, unexpected, or unsafe paths; mismatched row counts; new blockers; and other
+revalidation failures still fail closed. Deletion currently supports a symbolic link only as the
+final managed path component. It preserves that link in the backup and moves and purges the link
+itself; it never reads, writes, or removes the target. Symbolic links in intermediate path
+components remain unsupported because operating below one would cross the configured storage-root
+path boundary.
 
 ## Design notes
 
