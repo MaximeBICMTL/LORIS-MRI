@@ -14,8 +14,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from io import StringIO
 from pathlib import Path, PurePosixPath
-from typing import Any, TextIO, cast
+from typing import Any, Protocol, TextIO, cast
 from uuid import uuid4
 
 from sqlalchemy import Column, MetaData, Table, and_, exists, inspect, select, union_all
@@ -77,6 +78,17 @@ class BackupResult:
     operation_id: str
     selected_object_count: int
     selected_object_counts: Mapping[str, int]
+    database_row_count: int
+    file_count: int
+    blocker_count: int
+    reference_update_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class BackupPreview:
+    """Read-only counts from a materialized backup/removal plan."""
+
+    selected_object_count: int
     database_row_count: int
     file_count: int
     blocker_count: int
@@ -169,6 +181,50 @@ class _PendingFile:
     object_id: str
     storage_root: str
     relative_path: PurePosixPath
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedTableRows:
+    """Locked primary-key identities captured while writing one backup table."""
+
+    plan: DatabaseTableBackup
+    identities: tuple[tuple[object, ...], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedReferenceRows:
+    """Locked reference-row values needed for guarded transactional updates."""
+
+    plan: DatabaseReferenceCheck
+    rows: tuple[Mapping[str, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedBackupCapture:
+    """Materialized operation state available after its backup is verified."""
+
+    result: BackupResult
+    plan: BackupPlan
+    tables: tuple[CapturedTableRows, ...]
+    references: tuple[CapturedReferenceRows, ...]
+    pending_files: tuple[_PendingFile, ...]
+    file_entries: tuple[Mapping[str, object], ...]
+
+
+class BackupTransactionAction(Protocol):
+    """A destructive action performed after backup verification and before commit."""
+
+    def validate(self, blocker_count: int) -> None:
+        """Reject an ineligible locked plan before copying backup payloads."""
+
+    def apply(self, db: Session, capture: VerifiedBackupCapture) -> None:
+        """Apply database and reversible filesystem changes before commit."""
+
+    def after_commit(self) -> None:
+        """Finalize filesystem changes after the database commit succeeds."""
+
+    def commit_failed(self) -> None:
+        """Handle an indeterminate commit without assuming rollback."""
 
 
 def plan_backup(
@@ -870,6 +926,99 @@ def create_backup(
 ) -> BackupResult:
     """Stream a selected resource backup into a verified, atomically finalized directory."""
 
+    return create_backup_with_action(engine, schema, request)
+
+
+def preview_backup(
+    engine: Engine,
+    schema: ResourceSchema,
+    selection: BackupSelection,
+) -> BackupPreview:
+    """Materialize backup/removal counts without locking or writing an artifact."""
+
+    semantic_plan = plan_backup(schema, selection)
+    validated_updates = _validated_reference_updates(schema, selection)
+    updates_by_kind: dict[str, list[tuple[str, NullableReferenceSetBinding]]] = {}
+    for relationship, binding in validated_updates:
+        source_kind = schema.projection_path(relationship).root_kind
+        updates_by_kind.setdefault(source_kind, []).append((relationship, binding))
+
+    with engine.connect() as connection, connection.begin(), Session(connection) as db:
+        projection = execute_projection(db, semantic_plan)
+        selected_refs = frozenset(
+            ref
+            for projected in projection.projected
+            for ref in projected
+            if isinstance(ref, ObjectRef)
+        )
+        if not selected_refs:
+            raise ValueError("The backup selection projected no logical objects")
+        refs_by_kind: dict[str, tuple[ObjectRef, ...]] = {
+            kind: tuple(
+                sorted(
+                    (ref for ref in selected_refs if ref.kind == kind),
+                    key=str,
+                )
+            )
+            for kind in sorted({ref.kind for ref in selected_refs})
+        }
+        physical_plans = tuple(
+            _plan_backup_for_identities(
+                connection,
+                schema,
+                kind,
+                tuple(_identity_values(schema, kind, refs)),
+                tuple(updates_by_kind.get(kind, ())),
+            )
+            for kind, refs in refs_by_kind.items()
+        )
+        plan = _combine_backup_plans(connection, physical_plans)
+        database_row_count = 0
+        pending_file_count = 0
+        sink = StringIO()
+        for table_plan in plan.tables:
+            entry, pending_files = _write_database_table(db, table_plan, sink)
+            database_row_count += cast(int, entry["row_count"])
+            pending_file_count += len(pending_files)
+        for file_plan in plan.files:
+            pending_file_count += len(
+                _read_file_collection(db, file_plan, lock_rows=False)
+            )
+        reference_entries = tuple(
+            _write_database_reference(
+                db,
+                reference,
+                sink,
+                lock_rows=False,
+            )
+            for reference in plan.references
+        )
+
+    return BackupPreview(
+        selected_object_count=sum(len(refs) for refs in refs_by_kind.values()),
+        database_row_count=database_row_count,
+        file_count=pending_file_count,
+        blocker_count=sum(
+            cast(int, entry["row_count"])
+            for entry in reference_entries
+            if entry["action"] == "block"
+        ),
+        reference_update_count=sum(
+            cast(int, entry["row_count"])
+            for entry in reference_entries
+            if entry["action"] == "set-null"
+        ),
+    )
+
+
+def create_backup_with_action(
+    engine: Engine,
+    schema: ResourceSchema,
+    request: BackupRequest,
+    action: BackupTransactionAction | None = None,
+) -> BackupResult:
+    """Create a verified backup and optionally mutate resources in its transaction."""
+
     selection = request.selection
     semantic_plan = plan_backup(schema, selection)
     validated_updates = _validated_reference_updates(schema, selection)
@@ -903,11 +1052,13 @@ def create_backup(
     output.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
     finalized = False
+    action_applied = False
 
     try:
         sql_path = staging / "restore.sql"
         pending_files: list[_PendingFile] = []
         table_entries: list[dict[str, object]] = []
+        captured_tables: list[CapturedTableRows] = []
         database_row_count = 0
         selected_object_count = 0
         selected_object_counts: dict[str, int] = {}
@@ -960,30 +1111,43 @@ def create_backup(
                             "START TRANSACTION;\n\n"
                         )
                         for table_plan in plan.tables:
+                            identities: list[tuple[object, ...]] = []
                             entry, files = _write_database_table(
                                 db,
                                 table_plan,
                                 restore_sql,
                                 lock_rows=True,
+                                selected_identities=identities,
                             )
                             table_entries.append(entry)
+                            captured_tables.append(
+                                CapturedTableRows(table_plan, tuple(identities))
+                            )
                             row_count = cast(int, entry["row_count"])
                             database_row_count += row_count
                             pending_files.extend(files)
                         for file_plan in plan.files:
                             pending_files.extend(_read_file_collection(db, file_plan))
-                        reference_entries = tuple(
-                            _write_database_reference(db, reference, restore_sql)
-                            for reference in plan.references
-                        )
+                        reference_entries_list: list[dict[str, object]] = []
+                        captured_references: list[CapturedReferenceRows] = []
+                        for reference in plan.references:
+                            reference_rows: list[Mapping[str, object]] = []
+                            reference_entries_list.append(
+                                _write_database_reference(
+                                    db,
+                                    reference,
+                                    restore_sql,
+                                    selected_rows=reference_rows,
+                                )
+                            )
+                            captured_references.append(
+                                CapturedReferenceRows(reference, tuple(reference_rows))
+                            )
+                        reference_entries = tuple(reference_entries_list)
                         restore_sql.write("COMMIT;\n")
                         restore_sql.flush()
                         os.fsync(restore_sql.fileno())
 
-                    # Keep database locks until every backup payload is written and
-                    # verified. A future delete can run immediately after this point
-                    # in the same transaction without a row-level time-of-check gap.
-                    file_entries = _copy_files(request.storage_roots, staging, pending_files)
                     blocker_count = sum(
                         cast(int, entry["row_count"])
                         for entry in reference_entries
@@ -994,6 +1158,13 @@ def create_backup(
                         for entry in reference_entries
                         if entry["action"] == "set-null"
                     )
+                    if action is not None:
+                        action.validate(blocker_count)
+
+                    # Keep database locks until every backup payload is written and
+                    # verified. A transaction action can run immediately afterward
+                    # without a row-level time-of-check gap.
+                    file_entries = _copy_files(request.storage_roots, staging, pending_files)
                     manifest: dict[str, object] = {
                         "format": BACKUP_FORMAT,
                         "format_version": BACKUP_FORMAT_VERSION,
@@ -1064,21 +1235,40 @@ def create_backup(
                     # valid backup is safe even though no removal took place.
                     os.replace(staging, output)
                     finalized = True
+                    result = BackupResult(
+                        output=output,
+                        operation_id=operation_id,
+                        selected_object_count=selected_object_count,
+                        selected_object_counts=selected_object_counts,
+                        database_row_count=database_row_count,
+                        file_count=len(file_entries),
+                        blocker_count=blocker_count,
+                        reference_update_count=reference_update_count,
+                    )
+                    if action is not None:
+                        action.apply(
+                            db,
+                            VerifiedBackupCapture(
+                                result=result,
+                                plan=plan,
+                                tables=tuple(captured_tables),
+                                references=tuple(captured_references),
+                                pending_files=tuple(pending_files),
+                                file_entries=tuple(file_entries),
+                            ),
+                        )
+                        action_applied = True
     except BaseException:
         if not finalized:
             shutil.rmtree(staging, ignore_errors=True)
+        if action_applied and action is not None:
+            action.commit_failed()
         raise
 
-    return BackupResult(
-        output=output,
-        operation_id=operation_id,
-        selected_object_count=selected_object_count,
-        selected_object_counts=selected_object_counts,
-        database_row_count=database_row_count,
-        file_count=len(file_entries),
-        blocker_count=blocker_count,
-        reference_update_count=reference_update_count,
-    )
+    if action_applied and action is not None:
+        action.after_commit()
+
+    return result
 
 
 def verify_backup(path: Path) -> Mapping[str, object]:
@@ -1131,7 +1321,7 @@ def _write_database_table(
     restore_sql: TextIO,
     *,
     lock_rows: bool = False,
-    selected_identities: list[object] | None = None,
+    selected_identities: list[tuple[object, ...]] | None = None,
 ) -> tuple[dict[str, object], list[_PendingFile]]:
     digest = hashlib.sha256()
     row_count = 0
@@ -1146,11 +1336,9 @@ def _write_database_table(
         restore_sql.write(f"{_render_insert(plan.table, values)};\n")
         row_count += 1
         if selected_identities is not None:
-            if len(primary_key) != 1:
-                raise ValueError(
-                    f"Selected object table {plan.table.fullname!r} has a composite identity"
-                )
-            selected_identities.append(values[primary_key[0].key])
+            selected_identities.append(
+                tuple(values[column.key] for column in primary_key)
+            )
         for file_plan in plan.files:
             raw_path = values[file_plan.path_attribute.key]
             if raw_path is not None:
@@ -1184,11 +1372,15 @@ def _write_database_reference(
     db: Session,
     plan: DatabaseReferenceCheck,
     restore_sql: TextIO,
+    *,
+    lock_rows: bool = True,
+    selected_rows: list[Mapping[str, object]] | None = None,
 ) -> dict[str, object]:
     digest = hashlib.sha256()
     row_count = 0
+    statement = plan.statement.with_for_update() if lock_rows else plan.statement
     result = db.execute(
-        plan.statement.with_for_update().execution_options(yield_per=ROW_BATCH_SIZE)
+        statement.execution_options(yield_per=ROW_BATCH_SIZE)
     ).mappings()
     primary_key = tuple(plan.table.primary_key.columns)
     if plan.action == "set-null":
@@ -1200,6 +1392,8 @@ def _write_database_reference(
         restore_sql.write(f"-- restore {plan.relationship}\n")
     for row in result:
         values = {column.key: row[column.key] for column in plan.table.columns}
+        if selected_rows is not None:
+            selected_rows.append(values)
         _update_row_digest(digest, plan.table, values)
         if plan.action == "set-null":
             restore_sql.write(f"{_render_reference_update(plan, values, primary_key)};\n")
@@ -1221,10 +1415,13 @@ def _write_database_reference(
 def _read_file_collection(
     db: Session,
     plan: FileCollectionBackup,
+    *,
+    lock_rows: bool = True,
 ) -> list[_PendingFile]:
     pending_files: list[_PendingFile] = []
+    statement = plan.statement.with_for_update() if lock_rows else plan.statement
     result = db.execute(
-        plan.statement.with_for_update().execution_options(yield_per=ROW_BATCH_SIZE)
+        statement.execution_options(yield_per=ROW_BATCH_SIZE)
     ).mappings()
     for row in result:
         raw_path = row["relative_path"]

@@ -2,20 +2,20 @@
 
 Experimental logical resource model and data-management tools for LORIS.
 
-The package currently provides a read-only resource inspector and verified resource backups. Its
-API is unstable while the resource model and operation semantics are developed through concrete
-vertical slices.
+The package currently provides a read-only resource inspector, verified resource backups, and a
+backup-first DICOM archive deletion proof of concept. Its API is unstable while the resource model
+and operation semantics are developed through concrete vertical slices.
 
-## Proposed deletion design
+## DICOM archive deletion proof of concept
 
-The first deletion vertical slice will require a newly created, verified backup. Backup-free
+The first deletion vertical slice requires a newly created, verified backup. Backup-free
 deletion may become an explicit policy later, but backup must not be inseparable from the internal
 deletion architecture. A dry-run only plans the operation and does not require a backup.
 
 Backup and deletion must use the same materialized physical plan, database connection,
-transaction, and locks. Calling the current standalone `create_backup()` and subsequently opening
-a new transaction for deletion would introduce a time-of-check/time-of-use gap. Extract its
-transactional core into an operation pipeline before adding execution.
+transaction, and locks. The shared backup transaction therefore exposes its verified, locked
+capture to the deletion action rather than calling standalone `create_backup()` and subsequently
+opening a new transaction, which would introduce a time-of-check/time-of-use gap.
 
 The intended execution sequence is:
 
@@ -62,7 +62,7 @@ so for one operation. Nullability alone never grants permission. For example, de
 archive may be planned with:
 
 ```bash
-loris-data-manager backup \
+loris-data-manager delete \
   --select dicom-archive \
   --where dicom-archive.id=76 \
   --update dicom-archive.mri-upload \
@@ -71,27 +71,33 @@ loris-data-manager backup \
   --update dicom-archive.imaging-file
 ```
 
+This command is a read-only dry-run by default and reports owned rows, files, approved reference
+updates, and blockers. Add `--execute` to create the mandatory verified backup and perform the
+deletion. The proof of concept accepts exactly one direct `--select dicom-archive` projection;
+filters may select one or more archives, while an unnarrowed selection still requires `--all`.
+
 A standalone backup with `--update` remains read-only. It records the intended `set-null` actions
 and writes guarded restoration statements using the referencing row's primary key and `FK IS
 NULL`. Restoration inserts the archive and its owned rows parent-to-child, then restores surviving
-references. Eventual deletion must consume the same plan and perform those `set-null` updates
-before deleting the referenced archive. All reflected foreign keys not covered by owned rows or an
-explicit requested update remain blockers.
+references. Deletion consumes the same plan and performs those `set-null` updates before deleting
+the referenced archive. All reflected foreign keys not covered by owned rows or an explicit
+requested update remain blockers.
 
-The initial deletion CLI should default to dry-run and require a conspicuous execution flag. Empty
-or broad selections retain the existing `--all` guard. Missing, changed, unexpected, or unsafe
-paths; mismatched row counts; new blockers; and revalidation failures must all fail closed.
+The deletion CLI defaults to dry-run and requires the conspicuous `--execute` flag. Empty or broad
+selections retain the existing `--all` guard. Missing, changed, unexpected, or unsafe paths;
+mismatched row counts; new blockers; and revalidation failures all fail closed. Deletion currently
+rejects symbolic-link resources even though standalone backup follows and records their targets.
 
 ## Design notes
 
 - Known, owned database rows are selected and serialized through their SQLAlchemy ORM tables.
-  Before deletion is implemented, consider adding a fail-closed preflight check that the columns
-  of every owned ORM table match the reflected live database table. This is schema-drift
-  detection, not protection against concurrent row changes, and can be implemented later by
-  sharing comparison code with `python/scripts/check_orm_sql_sync.py`.
+  A follow-up should add a fail-closed preflight check that the columns of every owned ORM table
+  match the reflected live database table. This is schema-drift detection, not protection against
+  concurrent row changes, and can share comparison code with
+  `python/scripts/check_orm_sql_sync.py`.
 - Live database reflection remains authoritative for discovering declared foreign-key references,
   including references from deployment-specific tables that have no ORM model.
-- Backup and future deletion must share one explicit database transaction. The operation locks the
+- Backup and deletion share one explicit database transaction. The operation locks the
   semantically selected anchor rows while serializing them, freezes their returned primary keys as
   the operation selection, and then locks and serializes each owned table in deterministic
   parent-to-child order from those identities. It checks declared incoming references with locking
@@ -107,9 +113,12 @@ paths; mismatched row counts; new blockers; and revalidation failures must all f
   deletion slice simple and is appropriate when a small number of logical objects owns many
   physical rows. Revisit the representation, operation limits, or an identity spool only if
   selecting very large numbers of logical anchor objects becomes a concrete requirement.
-- Database row locks do not protect local files. File copying currently detects changes during a
-  copy; deletion must implement the quarantine and revalidation contract above, including
-  explicit symlink semantics.
+- Database row locks do not protect local files. File copying detects changes during a copy;
+  deletion rehashes real regular files against the verified backup and moves them to the
+  operation-specific quarantine before commit. Symbolic links fail closed in this first slice.
+- The proof of concept treats every surfaced commit failure as an indeterminate outcome and leaves
+  quarantine in place for reconciliation; it does not yet distinguish a database-confirmed
+  rollback that would permit automatic path restoration.
 - The current `mri-violation` kind represents one `mri_violations_log` check failure, not one
   underlying scan. Several such rows can name the same file, and warning rows can name a file
   already owned by an `imaging-file`. Its current `file` ownership binding is therefore too strong.
