@@ -1,7 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.bids_file as db_bids_file
@@ -20,8 +20,8 @@ class DbPhysioEventFile(Base):
     id             : Mapped[int]         = mapped_column('EventFileID', primary_key=True)
     physio_file_id : Mapped[int | None]  = mapped_column('PhysiologicalFileID', ForeignKey('physiological_file.PhysiologicalFileID'))
     project_id     : Mapped[int | None]  = mapped_column('ProjectID', ForeignKey('Project.ProjectID'))
-    file_type      : Mapped[str]         = mapped_column('FileType', ForeignKey('ImagingFileTypes.type'))
-    file_path      : Mapped[Path | None] = mapped_column('FilePath', StringPath)
+    file_type      : Mapped[str]         = mapped_column('FileType', String(20), ForeignKey('ImagingFileTypes.type'))
+    file_path      : Mapped[Path | None] = mapped_column('FilePath', StringPath(255))
     last_update    : Mapped[datetime]    = mapped_column('LastUpdate', default=datetime.now)
     last_written   : Mapped[datetime]    = mapped_column('LastWritten', default=datetime.now)
 

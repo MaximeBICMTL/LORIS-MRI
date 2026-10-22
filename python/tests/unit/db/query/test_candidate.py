@@ -4,6 +4,8 @@ import pytest
 from sqlalchemy.orm import Session as Database
 
 from lib.db.models.candidate import DbCandidate
+from lib.db.models.project import DbProject
+from lib.db.models.site import DbSite
 from lib.db.queries.candidate import try_get_candidate_with_cand_id
 
 
@@ -15,19 +17,19 @@ class Setup:
 
 
 @pytest.fixture
-def setup(db: Database):
+def setup(db: Database, site: DbSite, project: DbProject):
     candidate_1 = DbCandidate(
         cand_id = 111111,
         psc_id='DCC001',
-        registration_site_id = 1,
-        registration_project_id = 1,
+        registration_site = site,
+        registration_project = project,
     )
 
     candidate_2 = DbCandidate(
         cand_id = 222222,
         psc_id='DCC002',
-        registration_site_id = 1,
-        registration_project_id = 1,
+        registration_site = site,
+        registration_project = project,
     )
 
     db.add(candidate_1)

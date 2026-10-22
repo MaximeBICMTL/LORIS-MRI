@@ -1,4 +1,4 @@
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.user as db_user
@@ -11,11 +11,11 @@ class DbBidsEventFileMapping(Base):
 
     id                 : Mapped[int]         = mapped_column('ID', primary_key=True)
     event_file_id      : Mapped[int]         = mapped_column('EventFileID', ForeignKey('physiological_event_file.EventFileID'))
-    property_name      : Mapped[str]         = mapped_column('PropertyName')
-    property_value     : Mapped[str]         = mapped_column('PropertyValue')
+    property_name      : Mapped[str]         = mapped_column('PropertyName', String(50))
+    property_value     : Mapped[str]         = mapped_column('PropertyValue', String(255))
     hed_tag_id         : Mapped[int | None]  = mapped_column('HEDTagID', ForeignKey('hed_schema_nodes.ID'))
-    tag_value          : Mapped[str | None]  = mapped_column('TagValue')
-    description        : Mapped[str | None]  = mapped_column('Description')
+    tag_value          : Mapped[str | None]  = mapped_column('TagValue', Text)
+    description        : Mapped[str | None]  = mapped_column('Description', Text)
     has_pairing        : Mapped[bool | None] = mapped_column('HasPairing', IntBool, default=False)
     pair_rel_id        : Mapped[int | None]  = mapped_column('PairRelID')
     additional_members : Mapped[int | None]  = mapped_column('AdditionalMembers', default=0)

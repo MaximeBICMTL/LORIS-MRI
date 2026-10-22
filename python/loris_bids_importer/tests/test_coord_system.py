@@ -12,7 +12,9 @@ from lib.db.models.physio_coord_system_unit import DbPhysioCoordSystemUnit
 from lib.db.models.physio_electrode import DbPhysioElectrode
 from lib.db.models.physio_file import DbPhysioFile
 from lib.db.models.physio_modality import DbPhysioModality
+from lib.db.models.physio_output_type import DbPhysioOutputType
 from lib.db.models.point_3d import DbPoint3D
+from lib.db.models.session import DbSession
 from lib.env import Env
 from loris_bids_utils.eeg.coord_system import BidsCoordSystemJsonFile
 from sqlalchemy import select
@@ -24,12 +26,12 @@ from loris_bids_importer.coord_system import (
 )
 
 
-def test_import_bids_coord_systems_deduplicates_within_bids_file(env: Env, tmp_path: Path):
+def test_import_bids_coord_systems_deduplicates_within_bids_file(env: Env, tmp_path: Path, visit: DbSession):
     _add_lookups(env)
     dataset = _add_dataset(env)
     bids_file = _add_bids_file(env, dataset, Path('sub-01/meg/sub-01_coordsystem.json'))
-    first_physio_file = _add_physio_file(env, 1)
-    second_physio_file = _add_physio_file(env, 2)
+    first_physio_file = _add_physio_file(env, 1, visit)
+    second_physio_file = _add_physio_file(env, 2, visit)
     coord_system_file = _make_coord_system_file(tmp_path, {
         'MEGCoordinateSystem': 'CTF',
         'MEGCoordinateUnits': 'm',
@@ -53,13 +55,13 @@ def test_import_bids_coord_systems_deduplicates_within_bids_file(env: Env, tmp_p
     assert all(item.bids_file_id == bids_file.id for item in first.values())
 
 
-def test_import_bids_coord_systems_keeps_different_bids_files_separate(env: Env, tmp_path: Path):
+def test_import_bids_coord_systems_keeps_different_bids_files_separate(env: Env, tmp_path: Path, visit: DbSession):
     _add_lookups(env)
     dataset = _add_dataset(env)
     first_bids_file = _add_bids_file(env, dataset, Path('sub-01/meg/sub-01_coordsystem.json'))
     second_bids_file = _add_bids_file(env, dataset, Path('sub-02/meg/sub-02_coordsystem.json'))
-    first_physio_file = _add_physio_file(env, 1)
-    second_physio_file = _add_physio_file(env, 2)
+    first_physio_file = _add_physio_file(env, 1, visit)
+    second_physio_file = _add_physio_file(env, 2, visit)
     coord_system_file = _make_coord_system_file(
         tmp_path,
         {'MEGCoordinateSystem': 'CTF', 'MEGCoordinateUnits': 'm'},
@@ -72,9 +74,9 @@ def test_import_bids_coord_systems_keeps_different_bids_files_separate(env: Env,
     assert len(env.db.scalars(select(DbPhysioCoordSystem)).all()) == 2
 
 
-def test_electrode_import_creates_default_coord_system_when_required(env: Env):
+def test_electrode_import_creates_default_coord_system_when_required(env: Env, visit: DbSession):
     _add_lookups(env)
-    physio_file = _add_physio_file(env, 1)
+    physio_file = _add_physio_file(env, 1, visit)
 
     coord_systems = import_bids_coord_systems(env, None, None, physio_file)
 
@@ -99,6 +101,7 @@ def _add_lookups(env: Env):
         DbPhysioModality(id=2, name='eeg'),
         DbPhysioModality(id=3, name='ieeg'),
         DbPhysioModality(id=4, name='Not registered'),
+        DbPhysioOutputType(id=1, name='Raw'),
         DbPhysioCoordSystemName(id=1, name='Not registered'),
         DbPhysioCoordSystemName(id=2, name='CTF'),
         DbPhysioCoordSystemType(id=1, name='Not registered'),
@@ -134,12 +137,12 @@ def _add_bids_file(env: Env, dataset: DbBidsDataset, path: Path) -> DbBidsFile:
     return bids_file
 
 
-def _add_physio_file(env: Env, physio_file_id: int) -> DbPhysioFile:
+def _add_physio_file(env: Env, physio_file_id: int, visit: DbSession) -> DbPhysioFile:
     physio_file = DbPhysioFile(
         id               = physio_file_id,
         modality_id      = 1,
         output_type_id   = 1,
-        session_id       = 1,
+        session          = visit,
         type             = 'ctf',
         inserted_by_user = 'pytest',
         path             = Path(f'file-{physio_file_id}.ds'),

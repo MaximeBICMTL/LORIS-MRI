@@ -19,7 +19,7 @@ class DbBidsDataset(Base):
     The ID of this BIDS dataset.
     """
 
-    path: Mapped[Path] = mapped_column('Path', StringPath, unique=True)
+    path: Mapped[Path] = mapped_column('Path', StringPath(255), unique=True)
     """
     The path of this BIDS dataset, relative to the LORIS data directory.
     """

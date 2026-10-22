@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.notification_type as db_notification_type
@@ -16,12 +16,12 @@ class DbNotificationSpool(Base):
         = mapped_column('NotificationTypeID', ForeignKey('notification_types.NotificationTypeID'))
     process_id   : Mapped[int | None]      = mapped_column('ProcessID')
     time_spooled : Mapped[datetime | None] = mapped_column('TimeSpooled')
-    message      : Mapped[str | None]      = mapped_column('Message')
+    message      : Mapped[str | None]      = mapped_column('Message', Text)
     error        : Mapped[bool | None]     = mapped_column('Error', YNBool)
     verbose      : Mapped[bool]            = mapped_column('Verbose', YNBool, default=False)
     sent         : Mapped[bool]            = mapped_column('Sent', YNBool, default=False)
     site_id      : Mapped[int | None]      = mapped_column('CenterID')
-    origin       : Mapped[str | None]      = mapped_column('Origin')
+    origin       : Mapped[str | None]      = mapped_column('Origin', String(255))
     active       : Mapped[bool]            = mapped_column('Active', YNBool, default=True)
 
     type : Mapped['db_notification_type.DbNotificationType'] = relationship('DbNotificationType')

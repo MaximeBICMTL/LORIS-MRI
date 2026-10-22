@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.parameter_type as db_parameter_type
@@ -17,7 +17,7 @@ class DbPhysioFileParameter(Base):
     project_id  : Mapped[int | None] = mapped_column('ProjectID', ForeignKey('Project.ProjectID'))
     type_id     : Mapped[int]        = mapped_column('ParameterTypeID', ForeignKey('parameter_type.ParameterTypeID'))
     insert_time : Mapped[datetime]   = mapped_column('InsertTime', default=datetime.now)
-    value       : Mapped[str | None] = mapped_column('Value')
+    value       : Mapped[str | None] = mapped_column('Value', Text)
 
     file    : Mapped['db_physio_file.DbPhysioFile']       = relationship('DbPhysioFile', back_populates='parameters')
     project : Mapped['db_project.DbProject']              = relationship('DbProject')

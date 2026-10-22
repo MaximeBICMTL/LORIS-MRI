@@ -1,4 +1,4 @@
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.physio_coord_system as db_physio_coord_system
@@ -21,7 +21,7 @@ class DbPhysioCoordSystemPoint3d(Base):
         primary_key=True,
     )
 
-    name            : Mapped[str | None] = mapped_column('Name')
+    name            : Mapped[str | None] = mapped_column('Name', String(50))
 
     coord_system : Mapped['db_physio_coord_system.DbPhysioCoordSystem'] = relationship('DbPhysioCoordSystem')
     point        : Mapped['db_point_3d.DbPoint3D']                      = relationship('DbPoint3D')

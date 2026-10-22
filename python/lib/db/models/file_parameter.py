@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.file as db_file
@@ -15,7 +15,7 @@ class DbFileParameter(Base):
     id          : Mapped[int]        = mapped_column('ParameterFileID', primary_key=True)
     file_id     : Mapped[int]        = mapped_column('FileID', ForeignKey('files.FileID'))
     type_id     : Mapped[int]        = mapped_column('ParameterTypeID', ForeignKey('parameter_type.ParameterTypeID'))
-    value       : Mapped[str | None] = mapped_column('Value')
+    value       : Mapped[str | None] = mapped_column('Value', Text)
     insert_time : Mapped[datetime]   = mapped_column('InsertTime', IntDatetime, default=datetime.fromtimestamp(0))
 
     file: Mapped['db_file.DbFile'] \

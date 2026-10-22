@@ -1,3 +1,4 @@
+from sqlalchemy import String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.mri_protocol_check as db_mri_protocol_check
@@ -9,7 +10,7 @@ class DbMriScanType(Base):
     __tablename__ = 'mri_scan_type'
 
     id   : Mapped[int] = mapped_column('MriScanTypeID', primary_key=True)
-    name : Mapped[str] = mapped_column('MriScanTypeName')
+    name : Mapped[str] = mapped_column('MriScanTypeName', String(255))
 
     protocol_checks : Mapped[list['db_mri_protocol_check.DbMriProtocolCheck']] \
         = relationship('DbMriProtocolCheck', back_populates='scan_type')

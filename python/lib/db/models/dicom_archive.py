@@ -2,7 +2,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.dicom_archive_file as db_dicom_archive_file
@@ -20,12 +20,12 @@ class DbDicomArchive(Base):
     __tablename__ = 'tarchive'
 
     id                       : Mapped[int]             = mapped_column('TarchiveID', primary_key=True)
-    study_uid                : Mapped[str]             = mapped_column('StudyInstanceUID')
-    patient_id               : Mapped[str]             = mapped_column('PatientID', default='')
-    patient_name             : Mapped[str]             = mapped_column('PatientName', default='')
+    study_uid                : Mapped[str]             = mapped_column('StudyInstanceUID', String(255))
+    patient_id               : Mapped[str]             = mapped_column('PatientID', String(255), default='')
+    patient_name             : Mapped[str]             = mapped_column('PatientName', String(255), default='')
     patient_birthdate        : Mapped[date | None]     = mapped_column('PatientDoB')
-    patient_sex              : Mapped[str | None]      = mapped_column('PatientSex')
-    institution_name         : Mapped[str | None]      = mapped_column('InstitutionName')
+    patient_sex              : Mapped[str | None]      = mapped_column('PatientSex', String(255))
+    institution_name         : Mapped[str | None]      = mapped_column('InstitutionName', String(255))
     last_update              : Mapped[datetime | None] = mapped_column('LastUpdate')
     date_acquired            : Mapped[date | None]     = mapped_column('DateAcquired')
     date_first_archived      : Mapped[datetime | None] = mapped_column('DateFirstArchived')
@@ -33,22 +33,22 @@ class DbDicomArchive(Base):
     acquisition_count        : Mapped[int]             = mapped_column('AcquisitionCount', default=0)
     dicom_file_count         : Mapped[int]             = mapped_column('DicomFileCount', default=0)
     non_dicom_file_count     : Mapped[int]             = mapped_column('NonDicomFileCount', default=0)
-    md5_sum_dicom_only       : Mapped[str]             = mapped_column('md5sumDicomOnly')
-    md5_sum_archive          : Mapped[str]             = mapped_column('md5sumArchive')
-    creating_user            : Mapped[str]             = mapped_column('CreatingUser')
-    scanner_manufacturer     : Mapped[str | None]      = mapped_column('ScannerManufacturer')
-    scanner_model            : Mapped[str | None]      = mapped_column('ScannerModel')
-    scanner_serial_number    : Mapped[str | None]      = mapped_column('ScannerSerialNumber')
-    scanner_software_version : Mapped[str | None]      = mapped_column('ScannerSoftwareVersion')
+    md5_sum_dicom_only       : Mapped[str]             = mapped_column('md5sumDicomOnly', String(255))
+    md5_sum_archive          : Mapped[str]             = mapped_column('md5sumArchive', String(255))
+    creating_user            : Mapped[str]             = mapped_column('CreatingUser', String(255))
+    scanner_manufacturer     : Mapped[str | None]      = mapped_column('ScannerManufacturer', String(255))
+    scanner_model            : Mapped[str | None]      = mapped_column('ScannerModel', String(255))
+    scanner_serial_number    : Mapped[str | None]      = mapped_column('ScannerSerialNumber', String(255))
+    scanner_software_version : Mapped[str | None]      = mapped_column('ScannerSoftwareVersion', String(255))
     session_id               : Mapped[int | None]      = mapped_column('SessionID', ForeignKey('session.ID'))
-    create_info              : Mapped[str | None]      = mapped_column('CreateInfo')
+    create_info              : Mapped[str | None]      = mapped_column('CreateInfo', Text)
 
-    source_path: Mapped[Path] = mapped_column('SourceLocation', StringPath)
+    source_path: Mapped[Path] = mapped_column('SourceLocation', StringPath(255))
     """
     The path of the source DICOM study directory from which this DICOM archive was imported.
     """
 
-    path: Mapped[Path] = mapped_column('ArchiveLocation', StringPath)
+    path: Mapped[Path] = mapped_column('ArchiveLocation', StringPath(255))
     """
     The path of this DICOM archive relative to the LORIS DICOM archive directory.
     """

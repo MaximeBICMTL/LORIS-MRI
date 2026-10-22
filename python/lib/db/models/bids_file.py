@@ -1,7 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import ForeignKey, UniqueConstraint
+from sqlalchemy import ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.bids_dataset as db_bids_dataset
@@ -30,12 +30,12 @@ class DbBidsFile(Base):
     The ID of the BIDS dataset to which this file belongs.
     """
 
-    path: Mapped[Path] = mapped_column('Path', StringPath)
+    path: Mapped[Path] = mapped_column('Path', StringPath(255))
     """
     The path of this file relative to its LORIS BIDS dataset.
     """
 
-    source_path: Mapped[Path | None] = mapped_column('SourcePath', StringPath)
+    source_path: Mapped[Path | None] = mapped_column('SourcePath', StringPath(255))
     """
     The source path of this file relative to the BIDS dataset from which it was imported.
     """
@@ -45,7 +45,7 @@ class DbBidsFile(Base):
     The time at which this BIDS dataset was created in LORIS.
     """
 
-    blake2b_hash: Mapped[str] = mapped_column('Blake2bHash')
+    blake2b_hash: Mapped[str] = mapped_column('Blake2bHash', String(128))
     """
     The BLAKE2b hash of this file.
     """

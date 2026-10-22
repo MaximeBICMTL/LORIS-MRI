@@ -1,4 +1,4 @@
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.physio_task_event as db_physio_task_event
@@ -10,7 +10,7 @@ class DbPhysioTaskEventOpt(Base):
 
     id             : Mapped[int]        = mapped_column('ID', primary_key=True)
     task_event_id  : Mapped[int]        = mapped_column('PhysiologicalTaskEventID', ForeignKey('physiological_task_event.PhysiologicalTaskEventID'))
-    property_name  : Mapped[str]        = mapped_column('PropertyName')
-    property_value : Mapped[str | None] = mapped_column('PropertyValue')
+    property_name  : Mapped[str]        = mapped_column('PropertyName', String(50))
+    property_value : Mapped[str | None] = mapped_column('PropertyValue', String(255))
 
     task_event: Mapped['db_physio_task_event.DbPhysioTaskEvent'] = relationship('DbPhysioTaskEvent')

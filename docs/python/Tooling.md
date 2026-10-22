@@ -38,6 +38,61 @@ The core LORIS Python unit tests are located in the `python/tests/unit` director
 
 To run the LORIS Python unit tests, use the command `pytest` in the root LORIS-MRI directory or in a package directory to only run that package tests.
 
+Database tests require the `test` dependencies (`pip install --editable '.[test]'`) and a running,
+accessible Docker daemon. Testcontainers starts a disposable `mariadb:latest` container when the
+first database test runs. The first run may download MariaDB and Testcontainers' cleanup image.
+Use `docker pull mariadb:latest` to refresh a cached MariaDB image.
+
+One server is shared for the pytest session, with a separate server per worker if tests are run in
+parallel. By default, the ORM schema is created once per session/worker. Each test's `db` session
+uses a savepoint inside an outer transaction, which is rolled back after the test, including after
+failures. Calling `db.commit()` releases the savepoint; calling `db.rollback()` rolls back to it.
+Neither commits the outer transaction. Auto-increment counters are not reset, so fixtures should
+use the IDs of inserted records rather than assuming generated IDs start at one.
+
+Tests that need real commits visible to other connections, open their own sessions/connections,
+run subprocesses, or change the database schema must use `@pytest.mark.fresh_db`. The marker gives
+the usual `db_engine`, `db`, and `env` fixtures a fresh ORM-created database that is dropped after
+the test. A `fresh_db_engine` fixture is also available for tests explicitly managing their own
+sessions; the marker is preferable when combining it with `db` or `env`. For example:
+
+```py
+@pytest.mark.fresh_db
+def test_committed_data_is_visible(db, db_engine):
+    # db.commit() is a real database commit in this test.
+    ...
+```
+
+Use `pytest --db-isolation=fresh` to run all database tests with a fresh database per test, or
+`pytest --db-isolation=rollback` for the default strategy. Fresh databases are dropped even after
+failed tests or failed schema setup. No production database, SQL schema checkout, or integration
+dataset is required.
+
+Fixtures should create the parent records required by foreign keys. Shared `site`, `project`,
+`candidate`, and `visit` fixtures are available for tests that need those records.
+
+For performance comparisons or SQLite-specific diagnostics, use `pytest --db-backend=sqlite`.
+This uses an in-memory SQLite database with foreign keys enabled and supports both isolation
+strategies. MariaDB remains the default backend, including in CI; SQLite is never selected
+automatically when Docker fails.
+Tests that do not request database fixtures do not start any containers.
+
+To compare both backends with the same tests and record complete process wall times, run:
+
+```sh
+python test/benchmark_unit_tests.py --repeats 3 --output /tmp/unit-test-benchmark.json
+```
+
+The benchmark compares SQLite with fresh databases, MariaDB with fresh databases, and MariaDB
+with a shared schema and transaction rollback. The order rotates between repeats. Each MariaDB
+run includes a fresh container startup and container cleanup. Fresh mode creates and drops the
+schema per database test; rollback mode creates and drops it once for the run.
+Pre-pull the images for comparisons that exclude image download time. Additional pytest arguments
+can be supplied after `--`, for example `-- python/tests/unit/db/query`.
+
+Measurements from the SQLite-to-MariaDB migration are documented in the
+[database benchmark report](Unit_test_database_benchmark.md).
+
 ### Integration testing
 
 The LORIS-MRI integration tests are located in the `python/tests/integration` directory.

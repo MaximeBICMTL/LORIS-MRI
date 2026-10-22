@@ -1,0 +1,90 @@
+{
+  "python": "3.11.11",
+  "packages": {
+    "pytest": "9.0.3",
+    "sqlalchemy": "2.1.3",
+    "testcontainers": "4.15.0",
+    "mysqlclient": "2.3.0"
+  },
+  "pytest_args": [
+    "--ignore=python/tests/unit/db/test_fixtures.py"
+  ],
+  "runs": [
+    {
+      "backend": "sqlite",
+      "repeat": 1,
+      "wall_seconds": 1.4679536180001378,
+      "pytest_summary": "14 passed in 0.49s"
+    },
+    {
+      "backend": "mariadb",
+      "repeat": 1,
+      "wall_seconds": 14.85458319700001,
+      "pytest_summary": "14 passed in 13.32s"
+    },
+    {
+      "backend": "sqlite",
+      "repeat": 2,
+      "wall_seconds": 1.203056906999791,
+      "pytest_summary": "14 passed in 0.38s"
+    },
+    {
+      "backend": "mariadb",
+      "repeat": 2,
+      "wall_seconds": 16.479245492000246,
+      "pytest_summary": "14 passed in 13.71s"
+    },
+    {
+      "backend": "sqlite",
+      "repeat": 3,
+      "wall_seconds": 1.9133913190003113,
+      "pytest_summary": "14 passed in 0.39s"
+    },
+    {
+      "backend": "mariadb",
+      "repeat": 3,
+      "wall_seconds": 15.472474897999746,
+      "pytest_summary": "14 passed in 13.72s"
+    }
+  ],
+  "mariadb_version": "13.0.2-MariaDB-ubu2604",
+  "median_wall_seconds": {
+    "sqlite": 1.4679536180001378,
+    "mariadb": 15.472474897999746
+  },
+  "mariadb_over_sqlite": 10.54016605720733,
+  "measurement_date": "2026-10-22",
+  "original_revision": "96aa65870eca619fe576fd245ea892943c12d1f6",
+  "original_sqlite": {
+    "runs": [
+      {
+        "repeat": 1,
+        "wall_seconds": 1.8913039429999117,
+        "exit_code": 0,
+        "summary": "14 passed in 0.79s"
+      },
+      {
+        "repeat": 2,
+        "wall_seconds": 0.9887524740001936,
+        "exit_code": 0,
+        "summary": "14 passed in 0.38s"
+      },
+      {
+        "repeat": 3,
+        "wall_seconds": 0.9481071549998887,
+        "exit_code": 0,
+        "summary": "14 passed in 0.37s"
+      }
+    ],
+    "median_wall_seconds": 0.9887524740001936
+  },
+  "mariadb_over_original_sqlite": 15.648481601672044,
+  "mariadb_image_digest": "sha256:0e4bb0f339feba125d1154fbacd36c16ec8518f52e44e1f82ecec7d6771caf39",
+  "notes": [
+    "Same original 14 tests; four new fixture regression cases excluded from paired measurements.",
+    "Original SQLite code was exported from the original revision and run with the same interpreter and execution permissions.",
+    "Updated backends load all 67 ORM tables and create valid foreign-key parent records; SQLite also enables foreign-key enforcement.",
+    "MariaDB and Ryuk images were cached; container startup, schema creation, database deletion, and container cleanup are included.",
+    "Three complete runs per backend; no warmup runs excluded. Timings depend on the host and its load."
+  ]
+}

@@ -1,3 +1,4 @@
+from sqlalchemy import String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.config_setting as db_config_setting
@@ -9,10 +10,10 @@ class DbConfigCategory(Base):
     __tablename__ = 'ConfigCategories'
 
     id           : Mapped[int]         = mapped_column('ID', primary_key=True)
-    name         : Mapped[str]         = mapped_column('Name')
-    description  : Mapped[str | None]  = mapped_column('Description')
+    name         : Mapped[str]         = mapped_column('Name', String(255))
+    description  : Mapped[str | None]  = mapped_column('Description', String(255))
     visible      : Mapped[bool | None] = mapped_column('Visible', IntBool, default=False)
-    label        : Mapped[str | None]  = mapped_column('Label')
+    label        : Mapped[str | None]  = mapped_column('Label', String(255))
     order_number : Mapped[int | None]  = mapped_column('OrderNumber')
 
     settings: Mapped[list['db_config_setting.DbConfigSetting']] = relationship('DbConfigSetting', back_populates='category')

@@ -1,0 +1,224 @@
+{
+  "measurement_date": "2026-10-22",
+  "orm_tables": 67,
+  "application_tests": {
+    "tests": 14,
+    "database_tests": 11,
+    "measurements": {
+      "python": "3.11.11",
+      "packages": {
+        "pytest": "9.0.3",
+        "sqlalchemy": "2.1.3",
+        "testcontainers": "4.15.0",
+        "mysqlclient": "2.3.0"
+      },
+      "pytest_args": [
+        "--ignore=python/tests/unit/db/test_fixtures.py"
+      ],
+      "runs": [
+        {
+          "configuration": "sqlite-fresh",
+          "backend": "sqlite",
+          "isolation": "fresh",
+          "repeat": 1,
+          "wall_seconds": 2.538047132000429,
+          "pytest_summary": "14 passed in 1.10s"
+        },
+        {
+          "configuration": "mariadb-fresh",
+          "backend": "mariadb",
+          "isolation": "fresh",
+          "repeat": 1,
+          "wall_seconds": 15.873597075999896,
+          "pytest_summary": "14 passed in 14.32s"
+        },
+        {
+          "configuration": "mariadb-rollback",
+          "backend": "mariadb",
+          "isolation": "rollback",
+          "repeat": 1,
+          "wall_seconds": 7.391722364000088,
+          "pytest_summary": "14 passed in 5.83s"
+        },
+        {
+          "configuration": "mariadb-fresh",
+          "backend": "mariadb",
+          "isolation": "fresh",
+          "repeat": 2,
+          "wall_seconds": 16.031992891999835,
+          "pytest_summary": "14 passed in 14.17s"
+        },
+        {
+          "configuration": "mariadb-rollback",
+          "backend": "mariadb",
+          "isolation": "rollback",
+          "repeat": 2,
+          "wall_seconds": 9.440906252999412,
+          "pytest_summary": "14 passed in 6.66s"
+        },
+        {
+          "configuration": "sqlite-fresh",
+          "backend": "sqlite",
+          "isolation": "fresh",
+          "repeat": 2,
+          "wall_seconds": 4.724855493000177,
+          "pytest_summary": "14 passed in 1.96s"
+        },
+        {
+          "configuration": "mariadb-rollback",
+          "backend": "mariadb",
+          "isolation": "rollback",
+          "repeat": 3,
+          "wall_seconds": 6.735439946999577,
+          "pytest_summary": "14 passed in 5.45s"
+        },
+        {
+          "configuration": "sqlite-fresh",
+          "backend": "sqlite",
+          "isolation": "fresh",
+          "repeat": 3,
+          "wall_seconds": 1.7168458520000058,
+          "pytest_summary": "14 passed in 0.44s"
+        },
+        {
+          "configuration": "mariadb-fresh",
+          "backend": "mariadb",
+          "isolation": "fresh",
+          "repeat": 3,
+          "wall_seconds": 14.582704035999996,
+          "pytest_summary": "14 passed in 12.93s"
+        }
+      ],
+      "mariadb_version": "13.0.2-MariaDB-ubu2604",
+      "median_wall_seconds": {
+        "sqlite-fresh": 2.538047132000429,
+        "mariadb-fresh": 15.873597075999896,
+        "mariadb-rollback": 7.391722364000088
+      },
+      "fresh_over_rollback": 2.1474828591113067,
+      "rollback_saves_seconds": 8.481874711999808
+    }
+  },
+  "fivefold_application_tests": {
+    "tests": 70,
+    "database_tests": 55,
+    "measurements": {
+      "python": "3.11.11",
+      "packages": {
+        "pytest": "9.0.3",
+        "sqlalchemy": "2.1.3",
+        "testcontainers": "4.15.0",
+        "mysqlclient": "2.3.0"
+      },
+      "pytest_args": [
+        "--keep-duplicates",
+        "python/tests/unit/db/query",
+        "python/loris_bids_importer/tests",
+        "python/loris_bids_utils/tests",
+        "python/tests/unit/db/query",
+        "python/loris_bids_importer/tests",
+        "python/loris_bids_utils/tests",
+        "python/tests/unit/db/query",
+        "python/loris_bids_importer/tests",
+        "python/loris_bids_utils/tests",
+        "python/tests/unit/db/query",
+        "python/loris_bids_importer/tests",
+        "python/loris_bids_utils/tests",
+        "python/tests/unit/db/query",
+        "python/loris_bids_importer/tests",
+        "python/loris_bids_utils/tests"
+      ],
+      "runs": [
+        {
+          "configuration": "sqlite-fresh",
+          "backend": "sqlite",
+          "isolation": "fresh",
+          "repeat": 1,
+          "wall_seconds": 3.465081790000113,
+          "pytest_summary": "70 passed in 2.05s"
+        },
+        {
+          "configuration": "mariadb-fresh",
+          "backend": "mariadb",
+          "isolation": "fresh",
+          "repeat": 1,
+          "wall_seconds": 53.95408110700009,
+          "pytest_summary": "70 passed in 52.07s"
+        },
+        {
+          "configuration": "mariadb-rollback",
+          "backend": "mariadb",
+          "isolation": "rollback",
+          "repeat": 1,
+          "wall_seconds": 8.401869304999309,
+          "pytest_summary": "70 passed in 6.97s"
+        },
+        {
+          "configuration": "mariadb-fresh",
+          "backend": "mariadb",
+          "isolation": "fresh",
+          "repeat": 2,
+          "wall_seconds": 48.487663177000286,
+          "pytest_summary": "70 passed in 46.43s"
+        },
+        {
+          "configuration": "mariadb-rollback",
+          "backend": "mariadb",
+          "isolation": "rollback",
+          "repeat": 2,
+          "wall_seconds": 8.64810427500015,
+          "pytest_summary": "70 passed in 7.16s"
+        },
+        {
+          "configuration": "sqlite-fresh",
+          "backend": "sqlite",
+          "isolation": "fresh",
+          "repeat": 2,
+          "wall_seconds": 2.3428004059996965,
+          "pytest_summary": "70 passed in 1.14s"
+        },
+        {
+          "configuration": "mariadb-rollback",
+          "backend": "mariadb",
+          "isolation": "rollback",
+          "repeat": 3,
+          "wall_seconds": 8.012348754999948,
+          "pytest_summary": "70 passed in 5.85s"
+        },
+        {
+          "configuration": "sqlite-fresh",
+          "backend": "sqlite",
+          "isolation": "fresh",
+          "repeat": 3,
+          "wall_seconds": 2.055760608000128,
+          "pytest_summary": "70 passed in 1.14s"
+        },
+        {
+          "configuration": "mariadb-fresh",
+          "backend": "mariadb",
+          "isolation": "fresh",
+          "repeat": 3,
+          "wall_seconds": 49.555504880000626,
+          "pytest_summary": "70 passed in 47.26s"
+        }
+      ],
+      "mariadb_version": "13.0.2-MariaDB-ubu2604",
+      "median_wall_seconds": {
+        "sqlite-fresh": 2.3428004059996965,
+        "mariadb-fresh": 49.555504880000626,
+        "mariadb-rollback": 8.401869304999309
+      },
+      "fresh_over_rollback": 5.898152313618344,
+      "rollback_saves_seconds": 41.15363557500132
+    }
+  },
+  "notes": [
+    "Three complete process wall-time measurements per configuration; order rotates between repeats.",
+    "Images are cached; MariaDB container startup and cleanup are included in every process.",
+    "No warmup runs were discarded. Host load affects these local timings.",
+    "Six fixture regression cases are excluded from both workload sizes.",
+    "The larger workload repeats the same test paths five times using pytest --keep-duplicates.",
+    "This measures test-count growth at a fixed schema size, not more complex tests or larger schemas.",
+    "Fresh mode creates the ORM schema per database test; rollback mode creates it once per process."
+  ]
+}

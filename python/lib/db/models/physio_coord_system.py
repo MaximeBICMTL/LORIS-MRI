@@ -20,7 +20,7 @@ class DbPhysioCoordSystem(Base):
     type_id     : Mapped[int]         = mapped_column('TypeID', ForeignKey('physiological_coord_system_type.PhysiologicalCoordSystemTypeID'))
     unit_id     : Mapped[int]         = mapped_column('UnitID', ForeignKey('physiological_coord_system_unit.PhysiologicalCoordSystemUnitID'))
     modality_id : Mapped[int]         = mapped_column('ModalityID', ForeignKey('physiological_modality.PhysiologicalModalityID'))
-    file_path   : Mapped[Path | None] = mapped_column('FilePath', StringPath)
+    file_path   : Mapped[Path | None] = mapped_column('FilePath', StringPath(255))
     bids_file_id: Mapped[int | None]  = mapped_column('BidsFileID', ForeignKey('bids_file.ID', ondelete='SET NULL'))
 
     name     : Mapped['db_physio_coord_system_name.DbPhysioCoordSystemName'] = relationship('DbPhysioCoordSystemName')

@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.physio_event_file as db_physio_event_file
@@ -18,12 +18,12 @@ class DbPhysioTaskEvent(Base):
     insert_time    : Mapped[datetime]       = mapped_column('InsertTime', default=datetime.now)
     onset          : Mapped[Decimal]        = mapped_column('Onset')
     duration       : Mapped[Decimal]        = mapped_column('Duration')
-    channel        : Mapped[str | None]     = mapped_column('Channel')
+    channel        : Mapped[str | None]     = mapped_column('Channel', Text)
     event_code     : Mapped[int | None]     = mapped_column('EventCode')
-    event_value    : Mapped[str | None]     = mapped_column('EventValue')
+    event_value    : Mapped[str | None]     = mapped_column('EventValue', String(255))
     event_sample   : Mapped[int | None]     = mapped_column('EventSample')
-    event_type     : Mapped[str | None]     = mapped_column('EventType')
-    trial_type     : Mapped[str | None]     = mapped_column('TrialType')
+    event_type     : Mapped[str | None]     = mapped_column('EventType', String(50))
+    trial_type     : Mapped[str | None]     = mapped_column('TrialType', String(255))
     response_time  : Mapped[Decimal | None] = mapped_column('ResponseTime')
 
     physio_file : Mapped['db_physio_file.DbPhysioFile']            = relationship('DbPhysioFile')

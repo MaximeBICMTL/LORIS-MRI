@@ -36,6 +36,7 @@ dependencies = [
 # Dependencies used to run the unit and integration tests.
 test = [
     "pytest",
+    "testcontainers",
 ]
 
 # Dependencies used to run the static tests.
@@ -149,6 +150,9 @@ CapTrak = "CapTrak"  # BrainVision CapTrak
 # Integration tests are located in `python/tests/integration`, but they should be ran from the
 # appropriate Docker image (usually using GitHub Actions).
 addopts = ["--import-mode=importlib"]
+markers = [
+    "fresh_db: use a disposable database for real commits, separate connections, or schema changes",
+]
 testpaths = [
     "python/tests/unit",
     "python/loris_*/tests",

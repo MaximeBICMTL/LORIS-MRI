@@ -1,3 +1,4 @@
+from sqlalchemy import String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.mri_protocol_violated_scan as db_mri_protocol_violated_scan
@@ -8,7 +9,7 @@ class DbMriProtocolGroup(Base):
     __tablename__ = 'mri_protocol_group'
 
     id   : Mapped[int] = mapped_column('MriProtocolGroupID', primary_key=True)
-    name : Mapped[str] = mapped_column('Name')
+    name : Mapped[str] = mapped_column('Name', String(255))
 
     violated_scans: Mapped['db_mri_protocol_violated_scan.DbMriProtocolViolatedScan'] \
         = relationship('DbMriProtocolViolatedScan', back_populates='protocol_group')

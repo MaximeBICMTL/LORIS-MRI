@@ -1,7 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.bids_file as db_bids_file
@@ -27,13 +27,13 @@ class DbPhysioFile(Base):
     output_type_id   : Mapped[int]             = mapped_column('PhysiologicalOutputTypeID', ForeignKey('physiological_output_type.PhysiologicalOutputTypeID'))
     session_id       : Mapped[int]             = mapped_column('SessionID', ForeignKey('session.ID'))
     insert_time      : Mapped[datetime]        = mapped_column('InsertTime', default=datetime.now)
-    type             : Mapped[str | None]      = mapped_column('FileType')
+    type             : Mapped[str | None]      = mapped_column('FileType', String(12))
     acquisition_time : Mapped[datetime | None] = mapped_column('AcquisitionTime')
-    inserted_by_user : Mapped[str]             = mapped_column('InsertedByUser')
+    inserted_by_user : Mapped[str]             = mapped_column('InsertedByUser', String(50))
     index            : Mapped[int | None]      = mapped_column('Index')
     parent_id        : Mapped[int | None]      = mapped_column('ParentID')
 
-    path: Mapped[Path] = mapped_column('FilePath', StringPath)
+    path: Mapped[Path] = mapped_column('FilePath', StringPath(255))
     """
     The path of this physiological file relative to the LORIS data directory. The file may notably
     be a directory for MEG CTF data.

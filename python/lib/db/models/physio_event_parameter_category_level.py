@@ -1,4 +1,4 @@
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.physio_event_parameter as db_physio_event_parameter
@@ -10,8 +10,8 @@ class DbPhysioEventParameterCategoryLevel(Base):
 
     id                 : Mapped[int]        = mapped_column('CategoricalLevelID', primary_key=True)
     event_parameter_id : Mapped[int]        = mapped_column('EventParameterID', ForeignKey('physiological_event_parameter.EventParameterID'))
-    level_name         : Mapped[str]        = mapped_column('LevelName')
-    description        : Mapped[str | None] = mapped_column('Description')
-    hed                : Mapped[str | None] = mapped_column('HED')
+    level_name         : Mapped[str]        = mapped_column('LevelName', String(255))
+    description        : Mapped[str | None] = mapped_column('Description', Text)
+    hed                : Mapped[str | None] = mapped_column('HED', Text)
 
     event_parameter: Mapped['db_physio_event_parameter.DbPhysioEventParameter'] = relationship('DbPhysioEventParameter', back_populates='category_levels')

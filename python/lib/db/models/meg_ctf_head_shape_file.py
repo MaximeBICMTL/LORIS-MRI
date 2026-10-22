@@ -1,7 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.bids_file as db_bids_file
@@ -28,7 +28,7 @@ class DbMegCtfHeadShapeFile(Base):
     The ID of the BIDS information of this head shape file, if any.
     """
 
-    path: Mapped[Path] = mapped_column('Path', StringPath)
+    path: Mapped[Path] = mapped_column('Path', StringPath(255))
     """
     Path of the head shape file relative to the LORIS data directory.
     """
@@ -38,7 +38,7 @@ class DbMegCtfHeadShapeFile(Base):
     The time at which this head shape file was created in LORIS.
     """
 
-    blake2b_hash: Mapped[str] = mapped_column('Blake2bHash')
+    blake2b_hash: Mapped[str] = mapped_column('Blake2bHash', String(128))
     """
     Blake2B hash of the head shape file, which may be used to check that the on-disk file data
     matches the file registered in the LORIS database.

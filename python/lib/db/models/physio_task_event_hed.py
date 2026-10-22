@@ -1,4 +1,4 @@
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.hed_schema_node as db_hed_schema_node
@@ -14,7 +14,7 @@ class DbPhysioTaskEventHed(Base):
     id                 : Mapped[int]         = mapped_column('ID', primary_key=True)
     task_event_id      : Mapped[int]         = mapped_column('PhysiologicalTaskEventID', ForeignKey('physiological_task_event.PhysiologicalTaskEventID'))
     hed_tag_id         : Mapped[int | None]  = mapped_column('HEDTagID', ForeignKey('hed_schema_nodes.ID'))
-    tag_value          : Mapped[str | None]  = mapped_column('TagValue')
+    tag_value          : Mapped[str | None]  = mapped_column('TagValue', Text)
     has_pairing        : Mapped[bool | None] = mapped_column('HasPairing', IntBool, default=False)
     pair_rel_id        : Mapped[int | None]  = mapped_column('PairRelID', ForeignKey('physiological_task_event_hed_rel.ID'))
     additional_members : Mapped[int | None]  = mapped_column('AdditionalMembers', default=0)

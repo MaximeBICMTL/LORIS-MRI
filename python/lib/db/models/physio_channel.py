@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.physio_channel_type as db_physio_channel_type
@@ -20,17 +20,17 @@ class DbPhysioChannel(Base):
     channel_type_id    : Mapped[int]            = mapped_column('PhysiologicalChannelTypeID', ForeignKey('physiological_channel_type.PhysiologicalChannelTypeID'))
     status_type_id     : Mapped[int | None]     = mapped_column('PhysiologicalStatusTypeID', ForeignKey('physiological_status_type.PhysiologicalStatusTypeID'))
     insert_time        : Mapped[datetime]       = mapped_column('InsertTime', default=datetime.now)
-    name               : Mapped[str]            = mapped_column('Name')
-    description        : Mapped[str | None]     = mapped_column('Description')
+    name               : Mapped[str]            = mapped_column('Name', String(50))
+    description        : Mapped[str | None]     = mapped_column('Description', String(255))
     sampling_frequency : Mapped[int | None]     = mapped_column('SamplingFrequency')
     low_cutoff         : Mapped[Decimal | None] = mapped_column('LowCutoff')
     high_cutoff        : Mapped[Decimal | None] = mapped_column('HighCutoff')
     manual_flag        : Mapped[Decimal | None] = mapped_column('ManualFlag')
     notch              : Mapped[int | None]     = mapped_column('Notch')
-    reference          : Mapped[str | None]     = mapped_column('Reference')
-    status_description : Mapped[str | None]     = mapped_column('StatusDescription')
-    unit               : Mapped[str | None]     = mapped_column('Unit')
-    file_path          : Mapped[Path | None]    = mapped_column('FilePath', StringPath)
+    reference          : Mapped[str | None]     = mapped_column('Reference', String(255))
+    status_description : Mapped[str | None]     = mapped_column('StatusDescription', String(255))
+    unit               : Mapped[str | None]     = mapped_column('Unit', String(255))
+    file_path          : Mapped[Path | None]    = mapped_column('FilePath', StringPath(255))
 
     physio_file  : Mapped['db_physio_file.DbPhysioFile']                = relationship('DbPhysioFile', back_populates='channels')
     channel_type : Mapped['db_physio_channel_type.DbPhysioChannelType'] = relationship('DbPhysioChannelType')

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.physio_electrode_material as db_physio_electrode_material
@@ -16,10 +16,10 @@ class DbPhysioElectrode(Base):
     id          : Mapped[int]         = mapped_column('PhysiologicalElectrodeID', primary_key=True)
     type_id     : Mapped[int | None]  = mapped_column('PhysiologicalElectrodeTypeID', ForeignKey('physiological_electrode_type.PhysiologicalElectrodeTypeID'))
     material_id : Mapped[int | None]  = mapped_column('PhysiologicalElectrodeMaterialID', ForeignKey('physiological_electrode_material.PhysiologicalElectrodeMaterialID'))
-    name        : Mapped[str]         = mapped_column('Name')
+    name        : Mapped[str]         = mapped_column('Name', String(50))
     point_3d_id : Mapped[int]         = mapped_column('Point3DID', ForeignKey('point_3d.Point3DID'))
     impedance   : Mapped[int | None]  = mapped_column('Impedance')
-    file_path   : Mapped[Path | None] = mapped_column('FilePath', StringPath)
+    file_path   : Mapped[Path | None] = mapped_column('FilePath', StringPath(255))
 
     type     : Mapped['db_physio_electrode_type.DbPhysioElectrodeType | None']         = relationship('DbPhysioElectrodeType')
     material : Mapped['db_physio_electrode_material.DbPhysioElectrodeMaterial | None'] = relationship('DbPhysioElectrodeMaterial')

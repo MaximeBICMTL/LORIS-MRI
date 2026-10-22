@@ -23,6 +23,10 @@ The SQLAlchemy models are defined in the `lib.db.models` module. Each file conta
 
 An SQLAlchemy model and its attributes can be renamed compared to the LORIS SQL schema to adhere to the Python naming conventions, avoid repetitions, and provide a more consistent database abstraction.
 
+Unit tests create MariaDB tables directly from the ORM models. String columns therefore need an
+explicit `String(length)` or `Text` type. For paths, use `StringPath(length)` for a bounded string
+column, or `StringPath` for a text column.
+
 There is an integration test to ensure the SQLAlchemy models remain synchronized with the LORIS SQL schema.
 
 ### Query definitions

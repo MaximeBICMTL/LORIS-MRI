@@ -1,3 +1,4 @@
+from sqlalchemy import String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from lib.db.base import Base
@@ -7,7 +8,7 @@ class DbVisitWindow(Base):
     __tablename__  = 'Visit_Windows'
 
     id                   : Mapped[int]        = mapped_column('ID', primary_key=True)
-    visit_label          : Mapped[str | None] = mapped_column('Visit_label')
+    visit_label          : Mapped[str | None] = mapped_column('Visit_label', String(255))
     window_min_days      : Mapped[int | None] = mapped_column('WindowMinDays')
     window_max_days      : Mapped[int | None] = mapped_column('WindowMaxDays')
     optimum_min_days     : Mapped[int | None] = mapped_column('OptimumMinDays')

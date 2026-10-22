@@ -1,4 +1,4 @@
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.dicom_archive as db_dicom_archive
@@ -12,16 +12,16 @@ class DbDicomArchiveSeries(Base):
     id                 : Mapped[int]          = mapped_column('TarchiveSeriesID', primary_key=True)
     archive_id         : Mapped[int]          = mapped_column('TarchiveID', ForeignKey('tarchive.TarchiveID'))
     series_number      : Mapped[int]          = mapped_column('SeriesNumber', default=0)
-    series_description : Mapped[str | None]   = mapped_column('SeriesDescription')
-    sequence_name      : Mapped[str | None]   = mapped_column('SequenceName')
+    series_description : Mapped[str | None]   = mapped_column('SeriesDescription', String(255))
+    sequence_name      : Mapped[str | None]   = mapped_column('SequenceName', String(255))
     echo_time          : Mapped[float | None] = mapped_column('EchoTime')
     repetition_time    : Mapped[float | None] = mapped_column('RepetitionTime')
     inversion_time     : Mapped[float | None] = mapped_column('InversionTime')
     slice_thickness    : Mapped[float | None] = mapped_column('SliceThickness')
-    phase_encoding     : Mapped[str | None]   = mapped_column('PhaseEncoding')
+    phase_encoding     : Mapped[str | None]   = mapped_column('PhaseEncoding', String(255))
     number_of_files    : Mapped[int]          = mapped_column('NumberOfFiles', default=0)
-    series_uid         : Mapped[str | None]   = mapped_column('SeriesUID')
-    modality           : Mapped[str | None]   = mapped_column('Modality')
+    series_uid         : Mapped[str | None]   = mapped_column('SeriesUID', String(255))
+    modality           : Mapped[str | None]   = mapped_column('Modality', String(255))
 
     archive            : Mapped['db_dicom_archive.DbDicomArchive'] \
         = relationship('DbDicomArchive', back_populates='series')

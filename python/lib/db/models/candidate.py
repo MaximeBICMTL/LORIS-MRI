@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.mri_protocol_violated_scan as db_mri_protocol_violated_scan
@@ -18,28 +18,28 @@ class DbCandidate(Base):
 
     id                      : Mapped[int]         = mapped_column('ID', primary_key=True)
     cand_id                 : Mapped[int]         = mapped_column('CandID')
-    psc_id                  : Mapped[str]         = mapped_column('PSCID', default='')
-    external_id             : Mapped[str | None]  = mapped_column('ExternalID')
+    psc_id                  : Mapped[str]         = mapped_column('PSCID', String(255), default='')
+    external_id             : Mapped[str | None]  = mapped_column('ExternalID', String(255))
     date_of_birth           : Mapped[date | None] = mapped_column('DoB')
     date_of_death           : Mapped[date | None] = mapped_column('DoD')
-    date_of_death_precision : Mapped[str | None]  = mapped_column('DoD_precision')
+    date_of_death_precision : Mapped[str | None]  = mapped_column('DoD_precision', String(16))
     edc                     : Mapped[date | None] = mapped_column('EDC')
-    sex                     : Mapped[str | None]  = mapped_column('Sex')
+    sex                     : Mapped[str | None]  = mapped_column('Sex', String(255))
     registration_site_id    : Mapped[int]         = mapped_column('RegistrationCenterID', ForeignKey('psc.CenterID'))
     registration_project_id : Mapped[int]         = mapped_column('RegistrationProjectID', ForeignKey('Project.ProjectID'))
-    ethnicity               : Mapped[str | None]  = mapped_column('Ethnicity')
+    ethnicity               : Mapped[str | None]  = mapped_column('Ethnicity', String(255))
     active                  : Mapped[bool]        = mapped_column('Active', YNBool, default=True)
     date_active             : Mapped[date | None] = mapped_column('Date_active')
-    registered_by           : Mapped[str | None]  = mapped_column('RegisteredBy')
-    user_id                 : Mapped[str]         = mapped_column('UserID', default='')
+    registered_by           : Mapped[str | None]  = mapped_column('RegisteredBy', String(255))
+    user_id                 : Mapped[str]         = mapped_column('UserID', String(255), default='')
     date_registered         : Mapped[date | None] = mapped_column('Date_registered')
     flagged_caveatemptor    : Mapped[bool | None] = mapped_column('flagged_caveatemptor', TrueFalseBool, default=False)
     flagged_reason          : Mapped[int | None]  = mapped_column('flagged_reason')
-    flagged_other           : Mapped[str | None]  = mapped_column('flagged_other')
-    flagged_other_status    : Mapped[str | None]  = mapped_column('flagged_other_status')
+    flagged_other           : Mapped[str | None]  = mapped_column('flagged_other', String(255))
+    flagged_other_status    : Mapped[str | None]  = mapped_column('flagged_other_status', String(12))
     test_date               : Mapped[datetime]    = mapped_column('Testdate', default=datetime.now)
-    entity_type             : Mapped[str]         = mapped_column('Entity_type', default='Human')
-    proband_sex             : Mapped[str | None]  = mapped_column('ProbandSex')
+    entity_type             : Mapped[str]         = mapped_column('Entity_type', String(7), default='Human')
+    proband_sex             : Mapped[str | None]  = mapped_column('ProbandSex', String(255))
     proband_sate_of_birth   : Mapped[date | None] = mapped_column('ProbandDoB')
 
     sessions             : Mapped[list['db_session.DbSession']] \

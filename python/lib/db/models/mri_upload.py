@@ -2,7 +2,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import lib.db.models.dicom_archive as db_dicom_archive
@@ -17,13 +17,13 @@ class DbMriUpload(Base):
     __tablename__ = 'mri_upload'
 
     id                          : Mapped[int]             = mapped_column('UploadID', primary_key=True)
-    uploaded_by                 : Mapped[str]             = mapped_column('UploadedBy', default='')
+    uploaded_by                 : Mapped[str]             = mapped_column('UploadedBy', String(255), default='')
     upload_date                 : Mapped[datetime | None] = mapped_column('UploadDate')
-    upload_path                 : Mapped[Path]            = mapped_column('UploadLocation', StringPath, default='')
-    decompressed_path           : Mapped[Path]            = mapped_column('DecompressedLocation', StringPath, default='')
+    upload_path                 : Mapped[Path]            = mapped_column('UploadLocation', StringPath(255), default='')
+    decompressed_path           : Mapped[Path]            = mapped_column('DecompressedLocation', StringPath(255), default='')
     insertion_complete          : Mapped[bool]            = mapped_column('InsertionComplete', IntBool, default=False)
     inserting                   : Mapped[bool | None]     = mapped_column('Inserting', IntBool)
-    patient_name                : Mapped[str]             = mapped_column('PatientName', default='')
+    patient_name                : Mapped[str]             = mapped_column('PatientName', String(255), default='')
     number_of_minc_inserted     : Mapped[int | None]      = mapped_column('number_of_mincInserted')
     number_of_minc_created      : Mapped[int | None]      = mapped_column('number_of_mincCreated')
     dicom_archive_id            : Mapped[int | None] \
