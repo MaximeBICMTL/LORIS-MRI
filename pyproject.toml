@@ -26,6 +26,7 @@ dependencies = [
     "typing-extensions",
     "loris-bids-importer           @ {root:uri}/python/loris_bids_importer",
     "loris-bids-utils              @ {root:uri}/python/loris_bids_utils",
+    "loris-data-manager            @ {root:uri}/python/loris_data_manager",
     "loris-dicom-importer          @ {root:uri}/python/loris_dicom_importer",
     "loris-dicom-to-bids-converter @ {root:uri}/python/loris_dicom_to_bids_converter",
     "loris-ephys-chunker           @ {root:uri}/python/loris_ephys_chunker",
@@ -63,6 +64,7 @@ members = ["python/loris_*"]
 [tool.uv.sources]
 loris_bids_importer           = { workspace = true }
 loris_bids_utils              = { workspace = true }
+loris_data_manager            = { workspace = true }
 loris_dicom_importer          = { workspace = true }
 loris_dicom_to_bids_converter = { workspace = true }
 loris_ephys_chunker           = { workspace = true }

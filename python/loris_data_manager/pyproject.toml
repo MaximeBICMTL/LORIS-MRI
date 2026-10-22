@@ -1,0 +1,25 @@
+[project]
+name = "loris-data-manager"
+version = "29.0.0"
+description = "Logical resource model and data-management tools for LORIS"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+requires-python = ">= 3.11"
+dependencies = [
+    "sqlalchemy>=2.0.0",
+    "typer>=0.16.0",
+]
+
+[project.scripts]
+loris-data-manager = "loris_data_manager.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/loris_data_manager"]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+src = ["src", "tests"]
