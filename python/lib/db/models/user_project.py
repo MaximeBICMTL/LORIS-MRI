@@ -4,7 +4,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from lib.db.base import Base
 
 
-class DbUserProject(Base):
+class DbUserProject(Base, kw_only=True, eq=False):
     """
     Relationship between users and projects.
     """

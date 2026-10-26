@@ -7,17 +7,17 @@ from lib.db.base import Base
 from lib.db.decorators.y_n_bool import YNBool
 
 
-class DbPhysioEventParameter(Base):
+class DbPhysioEventParameter(Base, kw_only=True, eq=False):
     __tablename__ = 'physiological_event_parameter'
 
-    id             : Mapped[int]         = mapped_column('EventParameterID', primary_key=True)
+    id             : Mapped[int]         = mapped_column('EventParameterID', primary_key=True, init=False)
     event_file_id  : Mapped[int]         = mapped_column('EventFileID', ForeignKey('physiological_event_file.EventFileID'))
     parameter_name : Mapped[str]         = mapped_column('ParameterName')
-    description    : Mapped[str | None]  = mapped_column('Description')
-    long_name      : Mapped[str | None]  = mapped_column('LongName')
-    units          : Mapped[str | None]  = mapped_column('Units')
-    is_categorical : Mapped[bool | None] = mapped_column('isCategorical', YNBool)
-    hed            : Mapped[str | None]  = mapped_column('HED')
+    description    : Mapped[str | None]  = mapped_column('Description', default=None)
+    long_name      : Mapped[str | None]  = mapped_column('LongName', default=None)
+    units          : Mapped[str | None]  = mapped_column('Units', default=None)
+    is_categorical : Mapped[bool | None] = mapped_column('isCategorical', YNBool, default=None)
+    hed            : Mapped[str | None]  = mapped_column('HED', default=None)
 
-    event_file      : Mapped['db_physio_event_file.DbPhysioEventFile']                                             = relationship('DbPhysioEventFile')
-    category_levels : Mapped[list['db_physio_event_parameter_category_level.DbPhysioEventParameterCategoryLevel']] = relationship('DbPhysioEventParameterCategoryLevel', back_populates='event_parameter')
+    event_file      : Mapped['db_physio_event_file.DbPhysioEventFile']                                             = relationship('DbPhysioEventFile', init=False)
+    category_levels : Mapped[list['db_physio_event_parameter_category_level.DbPhysioEventParameterCategoryLevel']] = relationship('DbPhysioEventParameterCategoryLevel', back_populates='event_parameter', init=False)

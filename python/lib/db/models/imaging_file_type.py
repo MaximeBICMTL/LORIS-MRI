@@ -3,8 +3,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from lib.db.base import Base
 
 
-class DbImagingFileType(Base):
+class DbImagingFileType(Base, kw_only=True, eq=False):
     __tablename__ = 'ImagingFileTypes'
 
     name        : Mapped[str]        = mapped_column('type', primary_key=True)
-    description : Mapped[str | None] = mapped_column('description')
+    description : Mapped[str | None] = mapped_column('description', default=None)

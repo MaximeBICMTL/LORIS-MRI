@@ -8,21 +8,21 @@ import lib.db.models.mri_scan_type as db_mri_scan_type
 from lib.db.base import Base
 
 
-class DbMriProtocolCheck(Base):
+class DbMriProtocolCheck(Base, kw_only=True, eq=False):
     __tablename__ = 'mri_protocol_checks'
 
-    id                      : Mapped[int]            = mapped_column('ID', primary_key=True)
+    id                      : Mapped[int]            = mapped_column('ID', primary_key=True, init=False)
     scan_type_id            : Mapped[int | None] \
-        = mapped_column('MriScanTypeID', ForeignKey('mri_scan_type.MriScanTypeID'))
-    severity                : Mapped[str | None]     = mapped_column('Severity')
-    header                  : Mapped[str | None]     = mapped_column('Header')
-    valid_min               : Mapped[Decimal | None] = mapped_column('ValidMin')
-    valid_max               : Mapped[Decimal | None] = mapped_column('ValidMax')
-    valid_regex             : Mapped[str | None]     = mapped_column('ValidRegex')
+        = mapped_column('MriScanTypeID', ForeignKey('mri_scan_type.MriScanTypeID'), default=None)
+    severity                : Mapped[str | None]     = mapped_column('Severity', default=None)
+    header                  : Mapped[str | None]     = mapped_column('Header', default=None)
+    valid_min               : Mapped[Decimal | None] = mapped_column('ValidMin', default=None)
+    valid_max               : Mapped[Decimal | None] = mapped_column('ValidMax', default=None)
+    valid_regex             : Mapped[str | None]     = mapped_column('ValidRegex', default=None)
     protocol_check_group_id : Mapped[int] \
         = mapped_column('MriProtocolChecksGroupID', ForeignKey('mri_protocol_checks_group.MriProtocolChecksGroupID'))
 
     scan_type            : Mapped['db_mri_scan_type.DbMriScanType'] \
-        = relationship('DbMriScanType', back_populates='protocol_checks')
+        = relationship('DbMriScanType', back_populates='protocol_checks', init=False)
     protocol_check_group: Mapped['db_mri_protocol_check_group.DbMriProtocolCheckGroup'] \
-        = relationship('DbMriProtocolCheckGroup', back_populates='protocol_check')
+        = relationship('DbMriProtocolCheckGroup', back_populates='protocol_check', init=False)

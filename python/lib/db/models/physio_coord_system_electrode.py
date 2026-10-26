@@ -9,7 +9,7 @@ import lib.db.models.physio_file as db_physio_file
 from lib.db.base import Base
 
 
-class DbPhysioCoordSystemElectrode(Base):
+class DbPhysioCoordSystemElectrode(Base, kw_only=True, eq=False):
     __tablename__ = 'physiological_coord_system_electrode_rel'
 
     coord_system_id: Mapped[int] = mapped_column(
@@ -29,8 +29,8 @@ class DbPhysioCoordSystemElectrode(Base):
         ForeignKey('physiological_file.PhysiologicalFileID', ondelete='CASCADE'),
     )
 
-    insert_time     : Mapped[datetime] = mapped_column('InsertTime', default=datetime.now)
+    insert_time     : Mapped[datetime] = mapped_column('InsertTime', insert_default=datetime.now, default_factory=datetime.now)
 
-    coord_system : Mapped['db_physio_coord_system.DbPhysioCoordSystem'] = relationship('DbPhysioCoordSystem')
-    electrode    : Mapped['db_physio_electrode.DbPhysioElectrode']      = relationship('DbPhysioElectrode')
-    physio_file  : Mapped['db_physio_file.DbPhysioFile']                = relationship('DbPhysioFile')
+    coord_system : Mapped['db_physio_coord_system.DbPhysioCoordSystem'] = relationship('DbPhysioCoordSystem', init=False)
+    electrode    : Mapped['db_physio_electrode.DbPhysioElectrode']      = relationship('DbPhysioElectrode', init=False)
+    physio_file  : Mapped['db_physio_file.DbPhysioFile']                = relationship('DbPhysioFile', init=False)

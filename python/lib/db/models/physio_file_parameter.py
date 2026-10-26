@@ -9,16 +9,16 @@ import lib.db.models.project as db_project
 from lib.db.base import Base
 
 
-class DbPhysioFileParameter(Base):
+class DbPhysioFileParameter(Base, kw_only=True, eq=False):
     __tablename__ = 'physiological_parameter_file'
 
-    id          : Mapped[int]        = mapped_column('PhysiologicalParameterFileID', primary_key=True)
-    file_id     : Mapped[int | None] = mapped_column('PhysiologicalFileID', ForeignKey('physiological_file.PhysiologicalFileID'))
-    project_id  : Mapped[int | None] = mapped_column('ProjectID', ForeignKey('Project.ProjectID'))
+    id          : Mapped[int]        = mapped_column('PhysiologicalParameterFileID', primary_key=True, init=False)
+    file_id     : Mapped[int | None] = mapped_column('PhysiologicalFileID', ForeignKey('physiological_file.PhysiologicalFileID'), default=None)
+    project_id  : Mapped[int | None] = mapped_column('ProjectID', ForeignKey('Project.ProjectID'), default=None)
     type_id     : Mapped[int]        = mapped_column('ParameterTypeID', ForeignKey('parameter_type.ParameterTypeID'))
-    insert_time : Mapped[datetime]   = mapped_column('InsertTime', default=datetime.now)
-    value       : Mapped[str | None] = mapped_column('Value')
+    insert_time : Mapped[datetime]   = mapped_column('InsertTime', insert_default=datetime.now, default_factory=datetime.now)
+    value       : Mapped[str | None] = mapped_column('Value', default=None)
 
-    file    : Mapped['db_physio_file.DbPhysioFile']       = relationship('DbPhysioFile', back_populates='parameters')
-    project : Mapped['db_project.DbProject']              = relationship('DbProject')
-    type    : Mapped['db_parameter_type.DbParameterType'] = relationship('DbParameterType')
+    file    : Mapped['db_physio_file.DbPhysioFile']       = relationship('DbPhysioFile', back_populates='parameters', init=False)
+    project : Mapped['db_project.DbProject']              = relationship('DbProject', init=False)
+    type    : Mapped['db_parameter_type.DbParameterType'] = relationship('DbParameterType', init=False)

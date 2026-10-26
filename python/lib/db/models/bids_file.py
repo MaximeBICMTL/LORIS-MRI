@@ -10,7 +10,7 @@ from lib.db.decorators.int_bool import IntBool
 from lib.db.decorators.string_path import StringPath
 
 
-class DbBidsFile(Base):
+class DbBidsFile(Base, kw_only=True, eq=False):
     """
     A file within a LORIS BIDS dataset.
     """
@@ -20,7 +20,7 @@ class DbBidsFile(Base):
         UniqueConstraint('DatasetID', 'Path', name='bids_file_dataset_id_path_unique'),
     )
 
-    id: Mapped[int] = mapped_column('ID', primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column('ID', primary_key=True, autoincrement=True, init=False)
     """
     The ID of this BIDS file.
     """
@@ -35,12 +35,12 @@ class DbBidsFile(Base):
     The path of this file relative to its LORIS BIDS dataset.
     """
 
-    source_path: Mapped[Path | None] = mapped_column('SourcePath', StringPath)
+    source_path: Mapped[Path | None] = mapped_column('SourcePath', StringPath, default=None)
     """
     The source path of this file relative to the BIDS dataset from which it was imported.
     """
 
-    insert_time: Mapped[datetime] = mapped_column('InsertTime', default=datetime.now)
+    insert_time: Mapped[datetime] = mapped_column('InsertTime', insert_default=datetime.now, default_factory=datetime.now)
     """
     The time at which this BIDS dataset was created in LORIS.
     """
@@ -55,7 +55,7 @@ class DbBidsFile(Base):
     Whether this file is a BIDS derivative.
     """
 
-    dataset: Mapped['db_bids_dataset.DbBidsDataset'] = relationship('DbBidsDataset')
+    dataset: Mapped['db_bids_dataset.DbBidsDataset'] = relationship('DbBidsDataset', init=False)
     """
     The BIDS dataset to which this file belongs.
     """

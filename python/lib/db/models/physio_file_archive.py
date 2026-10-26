@@ -9,13 +9,13 @@ from lib.db.base import Base
 from lib.db.decorators.string_path import StringPath
 
 
-class DbPhysioFileArchive(Base):
+class DbPhysioFileArchive(Base, kw_only=True, eq=False):
     __tablename__ = 'physiological_archive'
 
-    id             : Mapped[int]      = mapped_column('PhysiologicalArchiveID', primary_key=True)
+    id             : Mapped[int]      = mapped_column('PhysiologicalArchiveID', primary_key=True, init=False)
     physio_file_id : Mapped[int]      = mapped_column('PhysiologicalFileID', ForeignKey('physiological_file.PhysiologicalFileID'))
-    insert_time    : Mapped[datetime] = mapped_column('InsertTime', default=datetime.now)
+    insert_time    : Mapped[datetime] = mapped_column('InsertTime', insert_default=datetime.now, default_factory=datetime.now)
     blake2b_hash   : Mapped[str]      = mapped_column('Blake2bHash')
     path           : Mapped[Path]     = mapped_column('FilePath', StringPath)
 
-    physio_file: Mapped['db_physio_file.DbPhysioFile'] = relationship('DbPhysioFile')
+    physio_file: Mapped['db_physio_file.DbPhysioFile'] = relationship('DbPhysioFile', init=False)

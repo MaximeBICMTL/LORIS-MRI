@@ -3,9 +3,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 from lib.db.base import Base
 
 
-class DbPhysioCoordSystemUnit(Base):
+class DbPhysioCoordSystemUnit(Base, kw_only=True, eq=False):
     __tablename__ = 'physiological_coord_system_unit'
 
-    id     : Mapped[int]        = mapped_column('PhysiologicalCoordSystemUnitID', primary_key=True)
+    id     : Mapped[int]        = mapped_column('PhysiologicalCoordSystemUnitID', primary_key=True, init=False)
     name   : Mapped[str]        = mapped_column('Name')
-    symbol : Mapped[str | None] = mapped_column('Symbol')
+    symbol : Mapped[str | None] = mapped_column('Symbol', default=None)

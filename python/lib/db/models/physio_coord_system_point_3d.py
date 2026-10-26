@@ -6,7 +6,7 @@ import lib.db.models.point_3d as db_point_3d
 from lib.db.base import Base
 
 
-class DbPhysioCoordSystemPoint3d(Base):
+class DbPhysioCoordSystemPoint3d(Base, kw_only=True, eq=False):
     __tablename__ = 'physiological_coord_system_point_3d_rel'
 
     coord_system_id : Mapped[int]        = mapped_column(
@@ -21,7 +21,7 @@ class DbPhysioCoordSystemPoint3d(Base):
         primary_key=True,
     )
 
-    name            : Mapped[str | None] = mapped_column('Name')
+    name            : Mapped[str | None] = mapped_column('Name', default=None)
 
-    coord_system : Mapped['db_physio_coord_system.DbPhysioCoordSystem'] = relationship('DbPhysioCoordSystem')
-    point        : Mapped['db_point_3d.DbPoint3D']                      = relationship('DbPoint3D')
+    coord_system : Mapped['db_physio_coord_system.DbPhysioCoordSystem'] = relationship('DbPhysioCoordSystem', init=False)
+    point        : Mapped['db_point_3d.DbPoint3D']                      = relationship('DbPoint3D', init=False)

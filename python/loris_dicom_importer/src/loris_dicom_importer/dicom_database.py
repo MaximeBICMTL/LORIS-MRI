@@ -24,7 +24,14 @@ def insert_dicom_archive(
     Insert a DICOM archive in the database.
     """
 
-    dicom_archive = DbDicomArchive()
+    dicom_archive = DbDicomArchive(
+        study_uid          = dicom_summary.info.study_instance_uid,
+        md5_sum_dicom_only = dicom_import_log.tarball_md5_sum,
+        md5_sum_archive    = dicom_import_log.archive_md5_sum,
+        creating_user      = dicom_import_log.creator_name,
+        source_path        = dicom_import_log.source_path,
+        path               = archive_path,
+    )
     populate_dicom_archive(dicom_archive, dicom_summary, dicom_import_log, archive_path)
     dicom_archive.date_first_archived = datetime.now()
     db.add(dicom_archive)

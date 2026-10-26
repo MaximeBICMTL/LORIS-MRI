@@ -9,14 +9,14 @@ from lib.db.base import Base
 
 # TODO: It might be possible that headshape files contain points in other units than centimeters,
 # in which case the database should be extended to handle it.
-class DbMegCtfHeadShapePoint(Base):
+class DbMegCtfHeadShapePoint(Base, kw_only=True, eq=False):
     """
     A 3D point present in a MEG CTF `headshape.pos` file.
     """
 
     __tablename__ = 'meg_ctf_head_shape_point'
 
-    id: Mapped[int] = mapped_column('ID', primary_key=True)
+    id: Mapped[int] = mapped_column('ID', primary_key=True, init=False)
     """
     ID of the head shape point.
     """
@@ -46,7 +46,7 @@ class DbMegCtfHeadShapePoint(Base):
     Z coordinate of the point in the head shape file, in centimeters.
     """
 
-    file: Mapped['db_meg_ctf_head_shape_file.DbMegCtfHeadShapeFile'] = relationship('DbMegCtfHeadShapeFile', back_populates='points')
+    file: Mapped['db_meg_ctf_head_shape_file.DbMegCtfHeadShapeFile'] = relationship('DbMegCtfHeadShapeFile', back_populates='points', init=False)
     """
     The head shape file to which this point belongs.
     """

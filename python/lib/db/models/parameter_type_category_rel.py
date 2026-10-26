@@ -3,7 +3,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from lib.db.base import Base
 
 
-class DbParameterTypeCategoryRel(Base):
+class DbParameterTypeCategoryRel(Base, kw_only=True, eq=False):
     __tablename__ = 'parameter_type_category_rel'
 
     parameter_type_id          : Mapped[int] = mapped_column('ParameterTypeID',         primary_key=True)
